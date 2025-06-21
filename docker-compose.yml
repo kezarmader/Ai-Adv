@@ -1,0 +1,64 @@
+version: "3.9"
+
+services:
+  llm-service:
+    image: ollama/ollama:latest          # always pin a tag you trust in prod
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0"        # share the same GPU
+      # NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Optional: limit Ollama’s GPU memory footprint
+      # OLLAMA_MAX_GPU_MEMORY: "20GiB"     # tweak for your card
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks: [app-net]
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 3 && ollama pull llama3 && wait"]
+
+  image-generator:
+    build: ./image-generator             # see Dockerfile tips below
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0"
+      # NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Optional PyTorch memory tuner
+      # PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:128
+    ports:
+      - "5001:5001"
+    networks: [app-net]
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+  poster-service:
+    build: ./poster-service
+    networks: [app-net]
+    ports:
+      - "5002:5002"
+
+  orchestrator:
+    build: ./orchestrator
+    depends_on:
+      - llm-service
+      - image-generator
+      - poster-service
+    networks: [app-net]
+    ports:
+      - "8000:8000"
+
+volumes:
+  ollama:
+
+networks:
+  app-net:
+

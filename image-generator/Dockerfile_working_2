@@ -1,0 +1,22 @@
+FROM nvcr.io/nvidia/pytorch:24.05-py3
+
+WORKDIR /app
+
+# Install system deps
+RUN apt-get update && apt-get install -y git wget libgl1 libglib2.0-0 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Avoid torch/vision/audio conflicts
+COPY requirements.txt .
+RUN grep -v 'torch\|torchvision\|torchaudio' requirements.txt > clean_requirements.txt && \
+    pip install --no-cache-dir -r clean_requirements.txt
+
+COPY . .
+
+ENV HF_HOME=/app/hf-cache
+RUN mkdir -p $HF_HOME
+
+EXPOSE 5001
+
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5001"]
+
