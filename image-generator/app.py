@@ -12,7 +12,7 @@ app = FastAPI()
 
 # Load SDXL base
 pipe = StableDiffusionXLPipeline.from_pretrained(
-    "stabilityai/stable-diffusion-xl-base-1.0",
+    "playgroundai/playground-v2-1024px-aesthetic",
     torch_dtype=torch.float16,
     variant="fp16",
     use_safetensors=True
