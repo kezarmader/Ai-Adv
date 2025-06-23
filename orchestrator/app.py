@@ -14,44 +14,50 @@ async def run_ad_campaign(req: Request):
     brand_text = body.get("brand_text")
     cta_text = body.get("cta_text")
 
-    context = f"""You are to output ONE thing and one thing only: a single, perfectly‑formed UTF‑8 JSON object.
+    context = f"""IMPORTANT: You must output a single, valid UTF‑8 JSON object. Absolutely nothing else.
 
-                Context
-                -------
-                Create an ad for a product: {product}, targeted at {audience}, using a tone {tone}. Generate descriptive scene for an image generator as well so 
-                that can be used to feed to an AI Model to generate a realistic image hook.
+                Context:
+                You are generating a realistic product ad for the following:
+                - Product: {product}
+                - Target Audience: {audience}
+                - Tone: {tone}
+                - Reference Link: https://www.amazon.com/dp/{asin}
 
-                reference: https://www.amazon.com/dp/{asin}
+                The goal is to:
+                1. Write an ad description using the specified tone and audience.
+                2. Provide a detailed scene prompt for use in image generation (include setting, objects, people if relevant).
 
-                Hard Rules (MUST follow every rule; failure on any rule makes the response invalid)
-                1. Respond **only** with raw JSON — no prose, no markdown, no code‑block fences, no leading/trailing back‑ticks, and no surrounding quotes.
-                2. All keys **must** be double‑quoted ASCII (\"...\").
-                3. All string values **must** be double‑quoted UTF‑8 with no unescaped control characters.
-                4. Absolutely **no** characters outside the UTF‑8 range.
-                5. No trailing commas, missing commas, or dangling braces/brackets.
-                6. Top‑level output must parse with both `json.load()` (file) and `json.loads()` (string) in Python without raising:
-                   • TypeError: expected string or bytes‑like object
-                   • ValueError / JSONDecodeError: expecting property name in double quotes
-                   • ValueError / JSONDecodeError: expecting ',' delimiter
-                   • ValueError / JSONDecodeError: extra data
-                7. The structure MUST include at minimum these keys:
-                   • "product"  – string
-                   • "audience" – string or array of strings
-                   • "tone"     – string
-                   • "description" – string
-                   • "features" – array of strings (or objects with name/value pairs)
-                8. Do **not** escape the entire JSON or wrap it in additional quotes; emit it plainly.
+                STRICT RULES (Failure on any rule makes the output invalid):
+                1. Output **only** a raw JSON object — no markdown, no comments, no backticks, no prose.
+                2. All keys must be **double-quoted** ASCII.
+                3. All string values must be **double-quoted** UTF‑8, with no control characters.
+                4. **No** characters outside the UTF‑8 range.
+                5. **No** trailing commas, missing commas, or malformed brackets/braces.
+                6. The output must be valid for both `json.loads()` and `json.load()` in Python — no exceptions, no escapes.
+                7. You MUST return at least these keys:
+                   - `"product"`: string
+                   - `"audience"`: string or list of strings
+                   - `"tone"`: string
+                   - `"description"`: string
+                   - `"features"`: list of strings
+                   - `"scene"`: a richly detailed text prompt for image generation
 
-                Example schema (for guidance only, DO NOT output this line):
+                Output Example (for format only — do not copy):
                 {{
-                  "product": "...",
-                  "audience": ["..."],
-                  "tone": "...",
-                  "description": "...",
-                  "features": ["...", "...", "..."]
+                  "product": "Example Product",
+                  "audience": ["photographers", "tech lovers"],
+                  "tone": "excited",
+                  "description": "This camera changes how you capture light and motion...",
+                  "features": ["Ultra HD", "Stabilized Zoom", "Wireless sync"],
+                  "scene": "A photographer holding the camera on a mountain at sunrise, dramatic golden light, backpack gear, wind in hair, 4K realism"
                 }}
 
-                Remember: if any character outside valid JSON appears, the whole response is invalid. Output just the JSON object, nothing more."""
+                DO NOT:
+                - Wrap the JSON in quotes
+                - Add ```json blocks
+                - Escape the entire response
+                - Include leading/trailing newlines or explanation
+               """
 
 
     # LLM call to Ollama
@@ -65,13 +71,17 @@ async def run_ad_campaign(req: Request):
     
     print('ad_text', ad_text)
 
-   # Image Generator
-    image_response = requests.post("http://image-generator:5001/generate", json={
-            "product_name": ad_text['product'],
+    image_prompt = {
+             "product_name": ad_text['product'],
             "features": ad_text['features'],
             "brand_text": brand_text,
-            "cta_text": cta_text
-        })
+            "cta_text": cta_text,
+            "scene": ad_text['scene']
+            }
+    print('image_prompt', image_prompt)
+
+   # Image Generator
+    image_response = requests.post("http://image-generator:5001/generate", json=image_prompt)
     
     print('image_response', image_response)
 

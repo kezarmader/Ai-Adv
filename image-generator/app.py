@@ -7,8 +7,10 @@ from diffusers import (
 )
 from PIL import Image, ImageDraw, ImageFont
 import torch, uuid, os
+from transformers import CLIPTokenizer
 
 app = FastAPI()
+clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
 
 # Load SDXL base
 pipe = StableDiffusionXLPipeline.from_pretrained(
@@ -35,6 +37,7 @@ class ImagePrompt(BaseModel):
     features: list[str]
     brand_text: str
     cta_text: str
+    scene: str
 
 
 # Utility: add branding/CTA overlays
@@ -56,18 +59,34 @@ def add_overlay(image: Image.Image, brand: str, product: str, cta: str) -> Image
 
     return image
 
+def trim_prompt(prompt: str, max_tokens: int = 77) -> str:
+    tokens = clip_tokenizer(prompt, truncation=True, max_length=max_tokens, return_tensors="pt")
+    decoded = clip_tokenizer.decode(tokens["input_ids"][0], skip_special_tokens=True)
+    return decoded
 
 # Main route
 @app.post("/generate")
 def generate_ad(data: ImagePrompt):
+    print('generating image', ImagePrompt)
+
     # 1. Build the prompt
-    prompt = (
-        f"{data.product_name}, features include {', '.join(data.features)}."
-        "car, wheel, women as model, Studio lighting, advertise shot, realistic, DSLR, 4K"
+    prompt = (f"{data.scene}"
+#        f"product '{data.product_name}', features include {', '.join(data.features)}."
+#        "scene: \"{scene}\"."
+#        "Important No Text, Follow scene, Studio lighting, advertise shot, realistic, DSLR, 4K"
     )
 
     # 2. Generate base image
-    base_image = pipe(prompt, guidance_scale=7.5, num_inference_steps=40).images[0]
+    for attempt in range(3):
+        try:
+            prompt = trim_prompt(prompt)
+            print('Prompt:', prompt)
+            base_image = pipe(prompt, guidance_scale=7.5, num_inference_steps=40).images[0]
+            break
+        except Exception as e:
+            if attempt == 2:
+                raise e
+            time.sleep(1)
 
     # 3. Refine image
     final_image = refiner(
