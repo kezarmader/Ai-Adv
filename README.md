@@ -177,19 +177,56 @@ docker-compose down -v
 
 ## 📊 Monitoring & Logs
 
+### Structured Logging
+All services now include comprehensive structured JSON logging with:
+- **Request tracing** with unique IDs across services
+- **Performance timing** for each operation 
+- **Resource monitoring** (GPU memory, file sizes)
+- **Error tracking** with detailed context
+- **Security-conscious logging** (no PII in logs)
+
 ### View Real-time Logs
 ```powershell
-# All services
+# All services with structured output
 docker-compose logs -f
 
-# Specific service
+# Specific service with filtering
 docker-compose logs -f orchestrator
 docker-compose logs -f image-generator
+
+# Error monitoring
+docker-compose logs -f | Select-String '"level":"ERROR"'
+
+# Performance analysis (requests >10 seconds)
+docker-compose logs | Select-String '"duration_ms":[0-9]{5,}'
 ```
+
+### Performance Metrics
+- **Ad Generation Pipeline**: Complete timing from request to response
+- **Image Generation**: Base generation, refinement, and overlay timing
+- **GPU Usage**: Memory allocation tracking for optimization
+- **File Operations**: Image sizes and cleanup events
+
+### Request Tracing
+Each request gets a unique ID that follows the complete workflow:
+```
+Orchestrator → LLM Service → Image Generator → Poster Service
+```
+
+For detailed logging documentation, see **[LOGGING.md](LOGGING.md)**
 
 ### Check Service Health
 ```powershell
-# API health checks
+# Quick health check script
+.\health_check.ps1
+
+# Detailed health check with log analysis
+.\health_check.ps1 -Detailed
+
+# Continuous monitoring (updates every 30 seconds)
+.\health_check.ps1 -Monitor
+
+# API health checks (manual)
 Invoke-RestMethod -Uri "http://localhost:8000/docs"  # FastAPI docs
 Invoke-RestMethod -Uri "http://localhost:11434/api/tags"  # Ollama models
 ```
@@ -233,6 +270,22 @@ Invoke-RestMethod -Uri "http://localhost:11434/api/tags"  # Ollama models
    - Images are automatically deleted after 10 minutes
    - Regenerate the advertisement to get a new download link
    - Check if the filename in the URL is correct
+
+6. **High Response Times**
+   ```
+   Requests taking longer than expected
+   ```
+   - Check individual operation timing: `docker-compose logs orchestrator | Select-String "duration_ms"`
+   - Monitor GPU memory usage: `docker-compose logs image-generator | Select-String "memory_allocated_mb"`
+   - Consider scaling or optimizing resource allocation
+
+7. **Service Errors in Logs**
+   ```
+   Multiple ERROR level messages
+   ```
+   - View recent errors: `docker-compose logs | Select-String '"level":"ERROR"' | Select-Object -Last 10`
+   - Check service health: `Invoke-RestMethod -Uri "http://localhost:8000/docs"`
+   - Review resource usage and restart services if needed
 
 ### Debug Mode
 Enable verbose logging by adding to service environment:
