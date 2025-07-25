@@ -287,15 +287,28 @@ def generate_ad(data: ImagePrompt):
                     schedule_cleanup(file_path, filename)
                     
                 except Exception as save_error:
-                    logger.error("Image saving failed", extra={
+                    # Get detailed directory information
+                    dir_exists = os.path.exists(IMAGES_DIR)
+                    dir_writable = os.access(IMAGES_DIR, os.W_OK) if dir_exists else False
+                    dir_readable = os.access(IMAGES_DIR, os.R_OK) if dir_exists else False
+                    
+                    logger.error("Image saving failed - detailed diagnostics", extra={
                         "filename": filename,
                         "file_path": file_path,
                         "images_dir": IMAGES_DIR,
-                        "images_dir_exists": os.path.exists(IMAGES_DIR),
-                        "images_dir_writable": os.access(IMAGES_DIR, os.W_OK) if os.path.exists(IMAGES_DIR) else False,
-                        "error": str(save_error),
-                        "error_type": type(save_error).__name__
+                        "images_dir_exists": dir_exists,
+                        "images_dir_writable": dir_writable,
+                        "images_dir_readable": dir_readable,
+                        "error_message": str(save_error),
+                        "error_type": type(save_error).__name__,
+                        "working_directory": os.getcwd(),
+                        "disk_space_available": "checking..."
                     })
+                    
+                    # Additional diagnostic logging
+                    logger.error(f"CRITICAL: Image save error details - {type(save_error).__name__}: {str(save_error)}")
+                    logger.error(f"CRITICAL: Directory {IMAGES_DIR} exists: {dir_exists}, writable: {dir_writable}")
+                    
                     raise save_error
 
             logger.info("Image generation completed successfully", extra={
