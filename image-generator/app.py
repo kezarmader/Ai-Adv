@@ -254,6 +254,7 @@ def generate_ad(data: ImagePrompt):
             with TimingContext("image_saving", logger):
                 filename = f"{uuid.uuid4()}.png"
                 file_path = os.path.join(IMAGES_DIR, filename)
+                file_size = 0  # Initialize file_size
                 
                 try:
                     # Check directory exists and is writable
