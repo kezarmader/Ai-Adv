@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Request, BaseHTTPMiddleware
+from fastapi import FastAPI, Request
+from starlette.middleware.base import BaseHTTPMiddleware
 import time
 from logging_config import setup_logging, generate_request_id, request_id
 
