@@ -147,7 +147,7 @@ def cleanup_image(image_path: str, filename: str):
         if os.path.exists(image_path):
             os.remove(image_path)
             logger.info("Image cleaned up successfully", extra={
-                "filename": filename,
+                "image_filename": filename,
                 "image_path": image_path
             })
         # Remove from tracking dictionary
@@ -155,7 +155,7 @@ def cleanup_image(image_path: str, filename: str):
             del image_timestamps[filename]
     except Exception as e:
         logger.error("Error cleaning up image", extra={
-            "filename": filename,
+            "image_filename": filename,
             "image_path": image_path,
             "error": str(e)
         })
@@ -166,7 +166,7 @@ def schedule_cleanup(image_path: str, filename: str):
     cleanup_thread.daemon = True
     cleanup_thread.start()
     logger.info("Image cleanup scheduled", extra={
-        "filename": filename,
+        "image_filename": filename,
         "cleanup_in_seconds": 600
     })
 
@@ -252,53 +252,42 @@ def generate_ad(data: ImagePrompt):
 
             # 5. Save and return download URL
             with TimingContext("image_saving", logger):
-                logger.info('test1')
                 filename = f"{uuid.uuid4()}.png"
-                logger.info('test2')
                 file_path = os.path.join(IMAGES_DIR, filename)
-                logger.info('test3')
                 file_size = 0  # Initialize file_size
                 
                 try:
-                    logger.info('test4')
                     # Check directory exists and is writable
                     if not os.path.exists(IMAGES_DIR):
                         os.makedirs(IMAGES_DIR, exist_ok=True)
                         logger.info("Created images directory", extra={"directory": IMAGES_DIR})
                     
-                    logger.info('test5')
                     # Check directory permissions
                     if not os.access(IMAGES_DIR, os.W_OK):
                         raise PermissionError(f"No write permission for directory: {IMAGES_DIR}")
                     
-                    logger.info('test6')
                     # Save the image
                     logger.info("Attempting to save image", extra={
                         "file_path": file_path,
                         "branded_image_mode": branded_image.mode if hasattr(branded_image, 'mode') else "unknown",
                         "branded_image_size": branded_image.size if hasattr(branded_image, 'size') else "unknown"
                     })
-                    logger.info('test7')
                     branded_image.save(file_path)
                     
-                    logger.info('test8')
                     # Verify file was created
                     if not os.path.exists(file_path):
                         raise FileNotFoundError(f"Image file was not created: {file_path}")
                     
-                    logger.info('test9')
                     # Get file size for logging
                     file_size = os.path.getsize(file_path)
                     
-                    logger.info('test10')
                     logger.info("Image saved successfully", extra={
-                        "filename": filename,
+                        "image_filename": filename,
                         "file_path": file_path,
                         "file_size_bytes": file_size,
                         "file_size_mb": round(file_size / 1024 / 1024, 2)
                     })
                     
-                    logger.info('test11')
                     # Track creation time and schedule cleanup
                     image_timestamps[filename] = time.time()
                     schedule_cleanup(file_path, filename)
@@ -310,7 +299,7 @@ def generate_ad(data: ImagePrompt):
                     dir_readable = os.access(IMAGES_DIR, os.R_OK) if dir_exists else False
                     
                     logger.error("Image saving failed - detailed diagnostics", extra={
-                        "filename": filename,
+                        "image_filename": filename,
                         "file_path": file_path,
                         "images_dir": IMAGES_DIR,
                         "images_dir_exists": dir_exists,
@@ -326,11 +315,10 @@ def generate_ad(data: ImagePrompt):
                     logger.error(f"CRITICAL: Image save error details - {type(save_error).__name__}: {str(save_error)}")
                     logger.error(f"CRITICAL: Directory {IMAGES_DIR} exists: {dir_exists}, writable: {dir_writable}")
                     
-                    logger.info('test12')
                     raise save_error
 
             logger.info("Image generation completed successfully", extra={
-                "filename": filename,
+                "image_filename": filename,
                 "total_duration_ms": round(timer.duration_ms, 2),
                 "file_size_mb": round(file_size / 1024 / 1024, 2)
             })
@@ -362,10 +350,10 @@ def generate_ad(data: ImagePrompt):
 @app.get("/download/{filename}")
 def download_image(filename: str, request: Request):
     """Download endpoint for generated images"""
-    with TimingContext("image_download", logger, {"filename": filename}):
+    with TimingContext("image_download", logger, {"image_filename": filename}):
         client_ip = request.client.host if request.client else "unknown"
         logger.info("Image download request", extra={
-            "filename": filename,
+            "image_filename": filename,
             "client_ip": client_ip
         })
         
@@ -374,7 +362,7 @@ def download_image(filename: str, request: Request):
         # Check if file exists
         if not os.path.exists(file_path):
             logger.warning("Image file not found", extra={
-                "filename": filename,
+                "image_filename": filename,
                 "file_path": file_path,
                 "client_ip": client_ip
             })
@@ -386,7 +374,7 @@ def download_image(filename: str, request: Request):
             elapsed_time = time.time() - creation_time
             if elapsed_time > 600:  # 10 minutes
                 logger.info("Image has expired, cleaning up", extra={
-                    "filename": filename,
+                    "image_filename": filename,
                     "elapsed_minutes": round(elapsed_time / 60, 1),
                     "client_ip": client_ip
                 })
@@ -396,7 +384,7 @@ def download_image(filename: str, request: Request):
                     del image_timestamps[filename]
                 except Exception as e:
                     logger.error("Error removing expired image", extra={
-                        "filename": filename,
+                        "image_filename": filename,
                         "error": str(e)
                     })
                 raise HTTPException(status_code=404, detail="Image has expired")
@@ -405,14 +393,14 @@ def download_image(filename: str, request: Request):
         try:
             file_size = os.path.getsize(file_path)
             logger.info("Image download successful", extra={
-                "filename": filename,
+                "image_filename": filename,
                 "client_ip": client_ip,
                 "file_size_bytes": file_size,
                 "file_size_mb": round(file_size / 1024 / 1024, 2)
             })
         except Exception as e:
             logger.error("Error getting file size", extra={
-                "filename": filename,
+                "image_filename": filename,
                 "error": str(e)
             })
             file_size = 0
