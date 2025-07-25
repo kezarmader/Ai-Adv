@@ -252,35 +252,45 @@ def generate_ad(data: ImagePrompt):
 
             # 5. Save and return download URL
             with TimingContext("image_saving", logger):
+                logger.info('test1')
                 filename = f"{uuid.uuid4()}.png"
+                logger.info('test2')
                 file_path = os.path.join(IMAGES_DIR, filename)
+                logger.info('test3')
                 file_size = 0  # Initialize file_size
                 
                 try:
+                    logger.info('test4')
                     # Check directory exists and is writable
                     if not os.path.exists(IMAGES_DIR):
                         os.makedirs(IMAGES_DIR, exist_ok=True)
                         logger.info("Created images directory", extra={"directory": IMAGES_DIR})
                     
+                    logger.info('test5')
                     # Check directory permissions
                     if not os.access(IMAGES_DIR, os.W_OK):
                         raise PermissionError(f"No write permission for directory: {IMAGES_DIR}")
                     
+                    logger.info('test6')
                     # Save the image
                     logger.info("Attempting to save image", extra={
                         "file_path": file_path,
                         "branded_image_mode": branded_image.mode if hasattr(branded_image, 'mode') else "unknown",
                         "branded_image_size": branded_image.size if hasattr(branded_image, 'size') else "unknown"
                     })
+                    logger.info('test7')
                     branded_image.save(file_path)
                     
+                    logger.info('test8')
                     # Verify file was created
                     if not os.path.exists(file_path):
                         raise FileNotFoundError(f"Image file was not created: {file_path}")
                     
+                    logger.info('test9')
                     # Get file size for logging
                     file_size = os.path.getsize(file_path)
                     
+                    logger.info('test10')
                     logger.info("Image saved successfully", extra={
                         "filename": filename,
                         "file_path": file_path,
@@ -288,6 +298,7 @@ def generate_ad(data: ImagePrompt):
                         "file_size_mb": round(file_size / 1024 / 1024, 2)
                     })
                     
+                    logger.info('test11')
                     # Track creation time and schedule cleanup
                     image_timestamps[filename] = time.time()
                     schedule_cleanup(file_path, filename)
@@ -315,6 +326,7 @@ def generate_ad(data: ImagePrompt):
                     logger.error(f"CRITICAL: Image save error details - {type(save_error).__name__}: {str(save_error)}")
                     logger.error(f"CRITICAL: Directory {IMAGES_DIR} exists: {dir_exists}, writable: {dir_writable}")
                     
+                    logger.info('test12')
                     raise save_error
 
             logger.info("Image generation completed successfully", extra={
