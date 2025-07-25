@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from diffusers import (
     StableDiffusionXLPipeline,
@@ -6,11 +8,21 @@ from diffusers import (
     EulerAncestralDiscreteScheduler
 )
 from PIL import Image, ImageDraw, ImageFont
-import torch, uuid, os
+import torch, uuid, os, time, threading
 from transformers import CLIPTokenizer
 
 app = FastAPI()
 clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+
+# Create images directory if it doesn't exist
+IMAGES_DIR = "/tmp/images"
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+# Mount static files for serving images
+app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
+
+# Dictionary to track image creation times for cleanup
+image_timestamps = {}
 
 # Load SDXL base
 pipe = StableDiffusionXLPipeline.from_pretrained(
@@ -64,6 +76,25 @@ def trim_prompt(prompt: str, max_tokens: int = 77) -> str:
     decoded = clip_tokenizer.decode(tokens["input_ids"][0], skip_special_tokens=True)
     return decoded
 
+def cleanup_image(image_path: str, filename: str):
+    """Delete image file after 10 minutes"""
+    time.sleep(600)  # 10 minutes = 600 seconds
+    try:
+        if os.path.exists(image_path):
+            os.remove(image_path)
+            print(f"Cleaned up image: {filename}")
+        # Remove from tracking dictionary
+        if filename in image_timestamps:
+            del image_timestamps[filename]
+    except Exception as e:
+        print(f"Error cleaning up image {filename}: {e}")
+
+def schedule_cleanup(image_path: str, filename: str):
+    """Schedule image cleanup in a background thread"""
+    cleanup_thread = threading.Thread(target=cleanup_image, args=(image_path, filename))
+    cleanup_thread.daemon = True
+    cleanup_thread.start()
+
 # Main route
 @app.post("/generate")
 def generate_ad(data: ImagePrompt):
@@ -100,9 +131,75 @@ def generate_ad(data: ImagePrompt):
     # 4. Add brand/CTA overlay
     branded_image = add_overlay(final_image, data.brand_text, data.product_name, data.cta_text)
 
-    # 5. Save and return path
-    path = f"/tmp/{uuid.uuid4()}.png"
-    branded_image.save(path)
+    # 5. Save and return download URL
+    filename = f"{uuid.uuid4()}.png"
+    file_path = os.path.join(IMAGES_DIR, filename)
+    branded_image.save(file_path)
+    
+    # Track creation time and schedule cleanup
+    image_timestamps[filename] = time.time()
+    schedule_cleanup(file_path, filename)
 
-    return {"url": path}
+    return {
+        "filename": filename,
+        "download_url": f"/download/{filename}",
+        "expires_in_minutes": 10
+    }
+
+@app.get("/download/{filename}")
+def download_image(filename: str):
+    """Download endpoint for generated images"""
+    file_path = os.path.join(IMAGES_DIR, filename)
+    
+    # Check if file exists
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Image not found or has expired")
+    
+    # Check if image has expired (more than 10 minutes old)
+    if filename in image_timestamps:
+        creation_time = image_timestamps[filename]
+        if time.time() - creation_time > 600:  # 10 minutes
+            # Clean up expired image
+            try:
+                os.remove(file_path)
+                del image_timestamps[filename]
+            except:
+                pass
+            raise HTTPException(status_code=404, detail="Image has expired")
+    
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="image/png",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@app.get("/status/{filename}")
+def check_image_status(filename: str):
+    """Check if an image is still available"""
+    file_path = os.path.join(IMAGES_DIR, filename)
+    
+    if not os.path.exists(file_path):
+        return {"status": "not_found", "message": "Image not found or has expired"}
+    
+    if filename in image_timestamps:
+        creation_time = image_timestamps[filename]
+        elapsed_time = time.time() - creation_time
+        remaining_time = max(0, 600 - elapsed_time)  # 10 minutes = 600 seconds
+        
+        if remaining_time > 0:
+            return {
+                "status": "available",
+                "remaining_minutes": round(remaining_time / 60, 1),
+                "download_url": f"/download/{filename}"
+            }
+        else:
+            return {"status": "expired", "message": "Image has expired"}
+    
+    return {"status": "unknown", "message": "Image status unknown"}
+
+@app.get("/")
+def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "image-generator"}
 
