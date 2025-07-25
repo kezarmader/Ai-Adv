@@ -344,41 +344,86 @@ def parse_llm_escaped_json(response):
 
         if not clean_json:
             logger.error("Missing 'response' key in LLM output", extra={
-                "available_keys": list(response_obj.keys()) if isinstance(response_obj, dict) else None
+                "available_keys": list(response_obj.keys()) if isinstance(response_obj, dict) else None,
+                "full_response": response[:500] + "..." if len(response) > 500 else response
             })
             raise ValueError("Missing 'response' key in LLM output")
 
         logger.debug("Raw JSON extracted from LLM response", extra={
-            "json_length": len(clean_json)
+            "json_length": len(clean_json),
+            "json_preview": clean_json[:300] + "..." if len(clean_json) > 300 else clean_json
         })
         
-        # Step 2: Unescape the string and convert it into a valid JSON object
+        # Step 2: Try to clean up common JSON issues before parsing
         try:
+            # First attempt: direct parsing
             unescaped = json.loads(clean_json)
             logger.info("LLM JSON response parsed successfully", extra={
                 "parsed_keys": list(unescaped.keys()) if isinstance(unescaped, dict) else None,
                 "product": unescaped.get('product') if isinstance(unescaped, dict) else None
             })
             return unescaped
+            
         except json.JSONDecodeError as e:
-            logger.error("Failed to decode JSON from LLM response", extra={
-                "json_decode_error": str(e),
-                "raw_json_preview": clean_json[:200] + "..." if len(clean_json) > 200 else clean_json
+            logger.warning("Initial JSON parse failed, attempting repair", extra={
+                "parse_error": str(e),
+                "error_line": e.lineno if hasattr(e, 'lineno') else None,
+                "error_column": e.colno if hasattr(e, 'colno') else None,
+                "error_position": e.pos if hasattr(e, 'pos') else None
             })
-            raise ValueError(f"Failed to decode JSON from response: {e}")
+            
+            # Try common fixes
+            repaired_json = clean_json
+            
+            # Fix 1: Remove trailing commas
+            import re
+            repaired_json = re.sub(r',(\s*[}\]])', r'\1', repaired_json)
+            
+            # Fix 2: Remove control characters except newlines and tabs
+            repaired_json = ''.join(char for char in repaired_json if ord(char) >= 32 or char in '\n\t')
+            
+            # Fix 3: Try to fix common quote issues
+            repaired_json = repaired_json.replace('"', '"').replace('"', '"')
+            repaired_json = repaired_json.replace("'", '"')
+            
+            logger.info("Attempting to parse repaired JSON", extra={
+                "original_length": len(clean_json),
+                "repaired_length": len(repaired_json),
+                "repaired_preview": repaired_json[:300] + "..." if len(repaired_json) > 300 else repaired_json
+            })
+            
+            try:
+                unescaped = json.loads(repaired_json)
+                logger.info("LLM JSON response parsed successfully after repair", extra={
+                    "parsed_keys": list(unescaped.keys()) if isinstance(unescaped, dict) else None,
+                    "product": unescaped.get('product') if isinstance(unescaped, dict) else None
+                })
+                return unescaped
+                
+            except json.JSONDecodeError as repair_error:
+                logger.error("Failed to decode JSON even after repair attempts", extra={
+                    "original_error": str(e),
+                    "repair_error": str(repair_error),
+                    "raw_json_full": clean_json,
+                    "repaired_json_full": repaired_json,
+                    "json_lines": clean_json.split('\n')[:10]  # First 10 lines for debugging
+                })
+                raise ValueError(f"Failed to decode JSON from response: {e}")
             
     except json.JSONDecodeError as e:
         logger.error("Failed to parse initial LLM response", extra={
             "json_decode_error": str(e),
-            "response_preview": response[:200] + "..." if len(response) > 200 else response
+            "response_preview": response[:500] + "..." if len(response) > 500 else response,
+            "response_full": response  # Full response for debugging
         })
         raise ValueError(f"Failed to parse LLM response: {e}")
     except Exception as e:
         logger.error("Unexpected error parsing LLM response", extra={
             "error": str(e),
-            "error_type": type(e).__name__
+            "error_type": type(e).__name__,
+            "response_preview": response[:500] + "..." if len(response) > 500 else response
         })
-        raise
+        raise ValueError(f"Unexpected error parsing LLM response: {e}")
 
 import re
 
