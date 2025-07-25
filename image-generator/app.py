@@ -68,7 +68,7 @@ with TimingContext("clip_tokenizer_init", logger):
     logger.info("CLIP tokenizer loaded successfully")
 
 # Create images directory if it doesn't exist
-IMAGES_DIR = "/tmp/images"
+IMAGES_DIR = "/app/images"
 os.makedirs(IMAGES_DIR, exist_ok=True)
 logger.info("Images directory created", extra={"directory": IMAGES_DIR})
 
@@ -254,21 +254,49 @@ def generate_ad(data: ImagePrompt):
             with TimingContext("image_saving", logger):
                 filename = f"{uuid.uuid4()}.png"
                 file_path = os.path.join(IMAGES_DIR, filename)
-                branded_image.save(file_path)
                 
-                # Get file size for logging
-                file_size = os.path.getsize(file_path)
-                
-                logger.info("Image saved successfully", extra={
-                    "filename": filename,
-                    "file_path": file_path,
-                    "file_size_bytes": file_size,
-                    "file_size_mb": round(file_size / 1024 / 1024, 2)
-                })
-                
-                # Track creation time and schedule cleanup
-                image_timestamps[filename] = time.time()
-                schedule_cleanup(file_path, filename)
+                try:
+                    # Check directory exists and is writable
+                    if not os.path.exists(IMAGES_DIR):
+                        os.makedirs(IMAGES_DIR, exist_ok=True)
+                        logger.info("Created images directory", extra={"directory": IMAGES_DIR})
+                    
+                    # Check directory permissions
+                    if not os.access(IMAGES_DIR, os.W_OK):
+                        raise PermissionError(f"No write permission for directory: {IMAGES_DIR}")
+                    
+                    # Save the image
+                    branded_image.save(file_path)
+                    
+                    # Verify file was created
+                    if not os.path.exists(file_path):
+                        raise FileNotFoundError(f"Image file was not created: {file_path}")
+                    
+                    # Get file size for logging
+                    file_size = os.path.getsize(file_path)
+                    
+                    logger.info("Image saved successfully", extra={
+                        "filename": filename,
+                        "file_path": file_path,
+                        "file_size_bytes": file_size,
+                        "file_size_mb": round(file_size / 1024 / 1024, 2)
+                    })
+                    
+                    # Track creation time and schedule cleanup
+                    image_timestamps[filename] = time.time()
+                    schedule_cleanup(file_path, filename)
+                    
+                except Exception as save_error:
+                    logger.error("Image saving failed", extra={
+                        "filename": filename,
+                        "file_path": file_path,
+                        "images_dir": IMAGES_DIR,
+                        "images_dir_exists": os.path.exists(IMAGES_DIR),
+                        "images_dir_writable": os.access(IMAGES_DIR, os.W_OK) if os.path.exists(IMAGES_DIR) else False,
+                        "error": str(save_error),
+                        "error_type": type(save_error).__name__
+                    })
+                    raise save_error
 
             logger.info("Image generation completed successfully", extra={
                 "filename": filename,
