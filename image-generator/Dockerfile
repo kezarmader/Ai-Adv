@@ -23,6 +23,9 @@ RUN grep -v 'torch' requirements.txt > temp_requirements.txt && \
 ENV HF_HOME=/app/hf-cache
 RUN mkdir -p $HF_HOME
 
+# Create images directory with proper permissions
+RUN mkdir -p /app/images && chmod 755 /app/images
+
 COPY . .
 
 # Optional debugging flags

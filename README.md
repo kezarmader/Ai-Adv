@@ -2,6 +2,39 @@
 
 A microservices-based AI application that generates product advertisements using Large Language Models (LLM) and Stable Diffusion image generation. The system automatically creates ad copy and corresponding visuals for products based on user input, with secure temporary image storage and download capabilities.
 
+## 📋 Table of Contents
+
+- [🏗️ Architecture](#️-architecture)
+- [⚠️ Privacy & Data Discl## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### MIT License Summary
+- ✅ **Commercial use** - You can use this software commercially
+- ✅ **Modification** - You can modify the source code
+- ✅ **Distribution** - You can distribute the software
+- ✅ **Private use** - You can use this software privately
+- ⚠️ **Liability** - The software is provided "as is" without warranty
+- ⚠️ **Attribution** - You must include the original license and copyright notice
+
+### Third-Party Components
+This project uses several open-source components:
+- **FastAPI** (MIT License)
+- **Stable Diffusion XL** (CreativeML Open RAIL++-M License)
+- **Ollama** (MIT License)
+- **Docker** (Apache 2.0 License)
+- **PyTorch** (BSD License)
+
+Please review the individual licenses of these components for their specific terms and conditions.er](#️-privacy--data-disclaimer)
+- [🌐 Live Demo](#-live-demo)
+- [🛠️ Prerequisites](#️-prerequisites)
+- [🚀 Quick Start](#-quick-start)
+- [📝 Usage](#-usage)
+- [🔧 Configuration](#-configuration)
+- [📊 Monitoring & Logs](#-monitoring--logs)
+- [🐛 Troubleshooting](#-troubleshooting)
+- [🔄 Development](#-development)
+
 ## 🏗️ Architecture
 
 The application consists of 4 microservices:
@@ -22,6 +55,13 @@ The application consists of 4 microservices:
 - **This is intended for product marketing content only** - avoid any content that could be harmful, inappropriate, or violate terms of service
 
 By using this service, you acknowledge that you understand these limitations and agree to use the service responsibly.
+
+### 🔒 Additional Security Features
+- **Request tracking**: Each request has a unique ID for debugging (no personal data stored)
+- **Automatic cleanup**: Generated images are deleted after 10 minutes
+- **No data persistence**: No user inputs are permanently stored
+- **Local processing**: All AI processing happens locally (no data sent to external services)
+- **Network isolation**: Services communicate only within Docker network
 
 ## 🌐 Live Demo
 
@@ -50,7 +90,7 @@ If the demo is unavailable, you can deploy the service locally using the instruc
 
 ### 1. Clone the Repository
 ```powershell
-git clone <repository-url>
+git clone https://github.com/kezarmader/Ai-Adv.git
 cd Ai-Adv
 ```
 
@@ -92,8 +132,18 @@ You should see:
 
 ### Generate an Advertisement
 
-Send a POST request to the orchestrator:
+Send a POST request to the orchestrator with the following fields:
 
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `product` | string | Yes | Name/description of the product |
+| `audience` | string | Yes | Target audience for the ad |
+| `tone` | string | Yes | Desired tone (e.g., "professional", "energetic", "friendly") |
+| `ASIN` | string | Yes | Amazon product ID (for reference) |
+| `brand_text` | string | Yes | Brand name to display on image |
+| `cta_text` | string | Yes | Call-to-action text for the image |
+
+**Example using curl:**
 ```powershell
 # Using curl (if available)
 curl -X POST "http://localhost:8000/run" `
@@ -108,7 +158,7 @@ curl -X POST "http://localhost:8000/run" `
   }'
 ```
 
-Or using PowerShell with Invoke-RestMethod:
+**Example using PowerShell:**
 ```powershell
 $body = @{
     product = "Wireless Bluetooth Headphones"
@@ -124,16 +174,23 @@ Invoke-RestMethod -Uri "http://localhost:8000/run" -Method Post -Body $body -Con
 
 ### Expected Response
 The API will return a JSON object containing:
-- Generated ad copy
-- Image download URL for the generated product image (valid for 10 minutes)
-- Posting status from the poster service
+- **ad_text**: Complete generated advertisement with product details, features, and scene description
+- **image_url**: Download URL for the generated product image (valid for 10 minutes)  
+- **post_status**: Status from the mock posting service
 
 Example response:
 ```json
 {
-  "ad_copy": "Unleash your potential with SoundFit Pro Wireless Bluetooth Headphones...",
+  "ad_text": {
+    "product": "Wireless Bluetooth Headphones",
+    "audience": ["fitness enthusiasts"],
+    "tone": "energetic and motivating",
+    "description": "Unleash your potential with SoundFit Pro Wireless Bluetooth Headphones...",
+    "features": ["Crystal Clear Audio", "30-Hour Battery", "Sweat Resistant"],
+    "scene": "A fitness enthusiast wearing headphones during an intense workout session"
+  },
   "image_url": "http://localhost:8000/download/a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
-  "post_status": {"status": "success", "message": "Ad posted successfully"}
+  "post_status": {"status": "success", "message": "Advertisement posted successfully to mock platform"}
 }
 ```
 
@@ -145,6 +202,16 @@ Invoke-WebRequest -Uri "http://localhost:8000/download/[filename].png" -OutFile 
 ```
 
 **Note**: Generated images are automatically deleted after 10 minutes for security and storage management.
+
+### Performance Expectations
+Typical response times (varies by hardware):
+- **First request**: 60-120 seconds (model loading)
+- **Subsequent requests**: 15-30 seconds
+- **LLM generation**: 5-15 seconds  
+- **Image generation**: 8-20 seconds
+- **Image download**: <1 second
+
+Response times depend on GPU performance and available VRAM.
 
 ## 🔧 Configuration
 
@@ -177,19 +244,69 @@ docker-compose down -v
 
 ## 📊 Monitoring & Logs
 
+### Structured Logging
+All services now include comprehensive structured JSON logging with:
+- **Request tracing** with unique IDs across services
+- **Performance timing** for each operation 
+- **Resource monitoring** (GPU memory, file sizes)
+- **Error tracking** with detailed context
+- **Security-conscious logging** (no PII in logs)
+
 ### View Real-time Logs
 ```powershell
-# All services
+# All services with structured output
 docker-compose logs -f
 
-# Specific service
+# Specific service with filtering
 docker-compose logs -f orchestrator
 docker-compose logs -f image-generator
+
+# Error monitoring
+docker-compose logs -f | Select-String '"level":"ERROR"'
+
+# Performance analysis (requests >10 seconds)
+docker-compose logs | Select-String '"duration_ms":[0-9]{5,}'
 ```
+
+### Log Management
+For production deployments, consider log rotation:
+```yaml
+# Add to docker-compose.yml
+services:
+  orchestrator:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+### Performance Metrics
+- **Ad Generation Pipeline**: Complete timing from request to response
+- **Image Generation**: Base generation, refinement, and overlay timing
+- **GPU Usage**: Memory allocation tracking for optimization
+- **File Operations**: Image sizes and cleanup events
+
+### Request Tracing
+Each request gets a unique ID that follows the complete workflow:
+```
+Orchestrator → LLM Service → Image Generator → Poster Service
+```
+
+For detailed logging documentation, see **[LOGGING.md](LOGGING.md)**
 
 ### Check Service Health
 ```powershell
-# API health checks
+# Quick health check script
+.\health_check.ps1
+
+# Detailed health check with log analysis
+.\health_check.ps1 -Detailed
+
+# Continuous monitoring (updates every 30 seconds)
+.\health_check.ps1 -Monitor
+
+# API health checks (manual)
 Invoke-RestMethod -Uri "http://localhost:8000/docs"  # FastAPI docs
 Invoke-RestMethod -Uri "http://localhost:11434/api/tags"  # Ollama models
 ```
@@ -234,6 +351,38 @@ Invoke-RestMethod -Uri "http://localhost:11434/api/tags"  # Ollama models
    - Regenerate the advertisement to get a new download link
    - Check if the filename in the URL is correct
 
+6. **High Response Times**
+   ```
+   Requests taking longer than expected
+   ```
+   - Check individual operation timing: `docker-compose logs orchestrator | Select-String "duration_ms"`
+   - Monitor GPU memory usage: `docker-compose logs image-generator | Select-String "memory_allocated_mb"`
+   - Consider scaling or optimizing resource allocation
+
+7. **Service Errors in Logs**
+   ```
+   Multiple ERROR level messages
+   ```
+   - View recent errors: `docker-compose logs | Select-String '"level":"ERROR"' | Select-Object -Last 10`
+   - Check service health: `Invoke-RestMethod -Uri "http://localhost:8000/docs"`
+   - Review resource usage and restart services if needed
+
+8. **Permission Errors (Windows)**
+   ```
+   Access denied or file in use errors
+   ```
+   - Run PowerShell as Administrator
+   - Ensure Docker Desktop is running with proper permissions
+   - Check Windows Defender or antivirus interference
+
+9. **Network Connectivity Issues**
+   ```
+   Services can't communicate
+   ```
+   - Verify Docker network: `docker network ls`
+   - Check firewall settings
+   - Restart Docker Desktop if needed
+
 ### Debug Mode
 Enable verbose logging by adding to service environment:
 ```yaml
@@ -276,13 +425,160 @@ Once running, visit:
 - **POST /run**: Generate complete advertisement (copy + image)
 - **GET /download/{filename}**: Download generated images (expires in 10 minutes)
 
-## 📄 License
+## � Quick Reference
+
+### Essential Commands
+```powershell
+# Start services
+docker-compose up --build
+
+# Check status
+.\health_check.ps1
+
+# View logs
+docker-compose logs -f
+
+# Stop services  
+docker-compose down
+
+# Clean restart
+docker-compose down -v && docker-compose up --build
+```
+
+### Service URLs
+- **Main API**: http://localhost:8000 (see /docs for API documentation)
+- **LLM Service**: http://localhost:11434 (Ollama)
+- **Image Generator**: http://localhost:5001 (see /docs)
+- **Poster Service**: http://localhost:5002 (see /docs)
+
+### Important Files
+- `docker-compose.yml` - Service configuration
+- `LOGGING.md` - Detailed logging documentation  
+- `health_check.ps1` - Health monitoring script
+- `CODE_REVIEW_SUMMARY.md` - Development notes
+
+## �📄 License
 
 [Add your license information here]
 
 ## 🤝 Contributing
 
-[Add contribution guidelines here]
+We welcome contributions to the AI Advertisement Generator! Here's how you can help:
+
+### 🚀 Ways to Contribute
+
+- **🐛 Bug Reports** - Found a bug? Please open an issue with detailed reproduction steps
+- **💡 Feature Requests** - Have an idea? Share it in the issues section
+- **📝 Documentation** - Help improve documentation and examples
+- **🔧 Code Contributions** - Submit pull requests for bug fixes or new features
+- **🧪 Testing** - Help test the application on different hardware configurations
+- **🎨 UI/UX** - Improve the API documentation or add web interfaces
+
+### 📋 Development Setup
+
+1. **Fork the repository**
+2. **Create a feature branch**:
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+3. **Set up development environment**:
+   ```powershell
+   # Clone your fork
+   git clone https://github.com/your-username/Ai-Adv.git
+   cd Ai-Adv
+   
+   # Install dependencies
+   pip install -r orchestrator/requirements.txt
+   pip install -r image-generator/requirements.txt
+   pip install -r poster-service/requirements.txt
+   ```
+
+### 🔧 Coding Standards
+
+- **Python**: Follow PEP 8 style guidelines
+- **Logging**: Use structured logging (see `logging_config.py`)
+- **Error Handling**: Include proper exception handling with context
+- **Documentation**: Add docstrings to functions and classes
+- **Testing**: Include tests for new features
+
+### 📝 Pull Request Process
+
+1. **Update documentation** if you're changing functionality
+2. **Add tests** for new features or bug fixes
+3. **Run the health check**: `.\health_check.ps1` before submitting
+4. **Update CHANGELOG.md** with your changes
+5. **Submit a pull request** with:
+   - Clear description of changes
+   - Screenshots/logs if applicable
+   - Reference to related issues
+
+### 🐛 Reporting Issues
+
+When reporting bugs, please include:
+- **Environment details** (OS, Docker version, GPU model)
+- **Error logs** (use `docker-compose logs` output)
+- **Steps to reproduce** the issue
+- **Expected vs actual behavior**
+
+**Example issue template:**
+```markdown
+**Bug Description**: Brief description of the issue
+
+**Environment**:
+- OS: Windows 11
+- Docker Desktop: v4.x.x
+- GPU: RTX 4090
+- VRAM: 24GB
+
+**Steps to Reproduce**:
+1. Start services with `docker-compose up`
+2. Send request to /run endpoint
+3. Error occurs during image generation
+
+**Error Logs**:
+```
+[Paste relevant logs here]
+```
+
+**Expected Behavior**: What should have happened
+**Actual Behavior**: What actually happened
+```
+
+### 🏷️ Issue Labels
+
+- `bug` - Something isn't working
+- `enhancement` - New feature or request
+- `documentation` - Improvements to documentation
+- `good first issue` - Good for newcomers
+- `help wanted` - Extra attention is needed
+- `performance` - Performance improvements
+- `security` - Security-related issues
+
+### 🌟 Recognition
+
+Contributors will be recognized in:
+- GitHub contributors list
+- CHANGELOG.md for significant contributions
+- Special thanks in release notes
+
+### 📞 Getting Help
+
+- **General questions**: Open a discussion in GitHub Discussions
+- **Bug reports**: Create an issue with the bug template
+- **Feature requests**: Create an issue with the feature template
+- **Security issues**: Email the maintainers directly
+
+For detailed contribution guidelines, see **[CONTRIBUTING.md](CONTRIBUTING.md)**
+
+### 🔒 Code of Conduct
+
+This project follows the [Contributor Covenant Code of Conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). By participating, you agree to uphold this code.
+
+**In summary**: Be respectful, inclusive, and constructive in all interactions.
+
+---
+
+Thank you for contributing to the AI Advertisement Generator! 🎉
 
 ---
 

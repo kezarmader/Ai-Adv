@@ -1,6 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from diffusers import (
     StableDiffusionXLPipeline,
@@ -10,13 +11,66 @@ from diffusers import (
 from PIL import Image, ImageDraw, ImageFont
 import torch, uuid, os, time, threading
 from transformers import CLIPTokenizer
+from logging_config import (
+    setup_logging, TimingContext, generate_request_id, request_id,
+    log_gpu_usage, log_image_generation_metrics
+)
 
-app = FastAPI()
-clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+# Setup structured logging
+logger = setup_logging("image-generator", "INFO")
+
+class LoggingMiddleware(BaseHTTPMiddleware):
+    """Middleware to log all HTTP requests and responses"""
+    
+    async def dispatch(self, request: Request, call_next):
+        # Generate and set request ID
+        req_id = generate_request_id()
+        request_id.set(req_id)
+        
+        # Log request details
+        client_ip = request.client.host if request.client else "unknown"
+        logger.info("HTTP request received", extra={
+            "method": request.method,
+            "path": str(request.url.path),
+            "client_ip": client_ip,
+            "event": "http_request"
+        })
+        
+        # Start timing
+        start_time = time.time()
+        
+        # Process request
+        response = await call_next(request)
+        
+        # Calculate duration
+        duration_ms = (time.time() - start_time) * 1000
+        
+        # Log response details
+        logger.info("HTTP response sent", extra={
+            "status_code": response.status_code,
+            "duration_ms": round(duration_ms, 2),
+            "event": "http_response"
+        })
+        
+        # Add request ID to response headers
+        response.headers["X-Request-ID"] = req_id
+        
+        return response
+
+app = FastAPI(title="AI Advertisement Generator - Image Generator", version="1.0.0")
+app.add_middleware(LoggingMiddleware)
+
+# Log service startup
+logger.info("Image generator service starting up")
+# Initialize CLIP tokenizer
+with TimingContext("clip_tokenizer_init", logger):
+    clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+    logger.info("CLIP tokenizer loaded successfully")
 
 # Create images directory if it doesn't exist
-IMAGES_DIR = "/tmp/images"
+IMAGES_DIR = "/app/images"
 os.makedirs(IMAGES_DIR, exist_ok=True)
+logger.info("Images directory created", extra={"directory": IMAGES_DIR})
 
 # Mount static files for serving images
 app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
@@ -24,23 +78,33 @@ app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
 # Dictionary to track image creation times for cleanup
 image_timestamps = {}
 
-# Load SDXL base
-pipe = StableDiffusionXLPipeline.from_pretrained(
-    "playgroundai/playground-v2-1024px-aesthetic",
-    torch_dtype=torch.float16,
-    variant="fp16",
-    use_safetensors=True
-).to("cuda")
-
-pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
+# Load SDXL base model
+logger.info("Loading SDXL base model...")
+with TimingContext("sdxl_base_model_loading", logger):
+    pipe = StableDiffusionXLPipeline.from_pretrained(
+        "playgroundai/playground-v2-1024px-aesthetic",
+        torch_dtype=torch.float16,
+        variant="fp16",
+        use_safetensors=True
+    ).to("cuda")
+    
+    pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
+    logger.info("SDXL base model loaded successfully")
+    log_gpu_usage(logger, "after_base_model_load")
 
 # Load SDXL refiner
-refiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-    "stabilityai/stable-diffusion-xl-refiner-1.0",
-    torch_dtype=torch.float16,
-    variant="fp16",
-    use_safetensors=True
-).to("cuda")
+logger.info("Loading SDXL refiner model...")
+with TimingContext("sdxl_refiner_model_loading", logger):
+    refiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-refiner-1.0",
+        torch_dtype=torch.float16,
+        variant="fp16",
+        use_safetensors=True
+    ).to("cuda")
+    logger.info("SDXL refiner model loaded successfully")
+    log_gpu_usage(logger, "after_refiner_model_load")
+
+logger.info("Image generator service ready")
 
 
 # Input model
@@ -82,97 +146,274 @@ def cleanup_image(image_path: str, filename: str):
     try:
         if os.path.exists(image_path):
             os.remove(image_path)
-            print(f"Cleaned up image: {filename}")
+            logger.info("Image cleaned up successfully", extra={
+                "image_filename": filename,
+                "image_path": image_path
+            })
         # Remove from tracking dictionary
         if filename in image_timestamps:
             del image_timestamps[filename]
     except Exception as e:
-        print(f"Error cleaning up image {filename}: {e}")
+        logger.error("Error cleaning up image", extra={
+            "image_filename": filename,
+            "image_path": image_path,
+            "error": str(e)
+        })
 
 def schedule_cleanup(image_path: str, filename: str):
     """Schedule image cleanup in a background thread"""
     cleanup_thread = threading.Thread(target=cleanup_image, args=(image_path, filename))
     cleanup_thread.daemon = True
     cleanup_thread.start()
+    logger.info("Image cleanup scheduled", extra={
+        "image_filename": filename,
+        "cleanup_in_seconds": 600
+    })
 
-# Main route
 @app.post("/generate")
 def generate_ad(data: ImagePrompt):
-    print('generating image', ImagePrompt)
+    """Generate advertisement image with text overlays"""
+    timer = None
+    try:
+        with TimingContext("image_generation_full", logger) as timer:
+            logger.info("Image generation request received", extra={
+                "product_name": data.product_name,
+                "features_count": len(data.features),
+                "scene_length": len(data.scene),
+                "brand_text": data.brand_text[:50] + "..." if len(data.brand_text) > 50 else data.brand_text,
+                "cta_text": data.cta_text[:50] + "..." if len(data.cta_text) > 50 else data.cta_text
+            })
+            
+            log_gpu_usage(logger, "before_generation")
+            # 1. Build the prompt
+            with TimingContext("prompt_building", logger):
+                prompt = (f"{data.scene}")
+                prompt = trim_prompt(prompt)
+                logger.info("Prompt prepared", extra={
+                    "original_scene_length": len(data.scene),
+                    "trimmed_prompt_length": len(prompt),
+                    "prompt_preview": prompt[:100] + "..." if len(prompt) > 100 else prompt
+                })
 
-    # 1. Build the prompt
-    prompt = (f"{data.scene}"
-#        f"product '{data.product_name}', features include {', '.join(data.features)}."
-#        "scene: \"{scene}\"."
-#        "Important No Text, Follow scene, Studio lighting, advertise shot, realistic, DSLR, 4K"
-    )
+            # 2. Generate base image with retries
+            with TimingContext("base_image_generation", logger) as base_timer:
+                base_image = None
+                for attempt in range(3):
+                    try:
+                        logger.info(f"Base image generation attempt {attempt + 1}", extra={
+                            "attempt": attempt + 1,
+                            "max_attempts": 3
+                        })
+                        
+                        log_image_generation_metrics(
+                            logger, 1024, 1024, 40, 7.5, "playground-v2-1024px-aesthetic"
+                        )
+                        
+                        base_image = pipe(prompt, guidance_scale=7.5, num_inference_steps=40).images[0]
+                        logger.info("Base image generated successfully", extra={
+                            "attempt": attempt + 1,
+                            "duration_ms": round(base_timer.duration_ms, 2)
+                        })
+                        break
+                    except Exception as e:
+                        logger.warning(f"Base image generation attempt {attempt + 1} failed", extra={
+                            "attempt": attempt + 1,
+                            "error": str(e),
+                            "duration_ms": round(base_timer.duration_ms, 2) if base_timer else None
+                        })
+                        if attempt == 2:
+                            logger.error("All base image generation attempts failed")
+                            raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
+                        time.sleep(1)
+                        
+                if base_image is None:
+                    raise HTTPException(status_code=500, detail="Failed to generate base image")
 
-    # 2. Generate base image
-    for attempt in range(3):
-        try:
-            prompt = trim_prompt(prompt)
-            print('Prompt:', prompt)
-            base_image = pipe(prompt, guidance_scale=7.5, num_inference_steps=40).images[0]
-            break
-        except Exception as e:
-            if attempt == 2:
-                raise e
-            time.sleep(1)
+            log_gpu_usage(logger, "after_base_generation")
 
-    # 3. Refine image
-    final_image = refiner(
-        prompt=prompt,
-        image=base_image,
-        strength=0.3,
-        guidance_scale=7.5,
-        num_inference_steps=20
-    ).images[0]
+            # 3. Refine image
+            with TimingContext("image_refinement", logger):
+                logger.info("Starting image refinement")
+                final_image = refiner(
+                    prompt=prompt,
+                    image=base_image,
+                    strength=0.3,
+                    guidance_scale=7.5,
+                    num_inference_steps=20
+                ).images[0]
+                logger.info("Image refinement completed")
 
-    # 4. Add brand/CTA overlay
-    branded_image = add_overlay(final_image, data.brand_text, data.product_name, data.cta_text)
+            log_gpu_usage(logger, "after_refinement")
 
-    # 5. Save and return download URL
-    filename = f"{uuid.uuid4()}.png"
-    file_path = os.path.join(IMAGES_DIR, filename)
-    branded_image.save(file_path)
-    
-    # Track creation time and schedule cleanup
-    image_timestamps[filename] = time.time()
-    schedule_cleanup(file_path, filename)
+            # 4. Add brand/CTA overlay
+            with TimingContext("overlay_addition", logger):
+                logger.info("Adding brand and CTA overlays")
+                branded_image = add_overlay(final_image, data.brand_text, data.product_name, data.cta_text)
 
-    return {
-        "filename": filename,
-        "download_url": f"/download/{filename}",
-        "expires_in_minutes": 10
-    }
+            # 5. Save and return download URL
+            with TimingContext("image_saving", logger):
+                filename = f"{uuid.uuid4()}.png"
+                file_path = os.path.join(IMAGES_DIR, filename)
+                file_size = 0  # Initialize file_size
+                
+                try:
+                    # Check directory exists and is writable
+                    if not os.path.exists(IMAGES_DIR):
+                        os.makedirs(IMAGES_DIR, exist_ok=True)
+                        logger.info("Created images directory", extra={"directory": IMAGES_DIR})
+                    
+                    # Check directory permissions
+                    if not os.access(IMAGES_DIR, os.W_OK):
+                        raise PermissionError(f"No write permission for directory: {IMAGES_DIR}")
+                    
+                    # Save the image
+                    logger.info("Attempting to save image", extra={
+                        "file_path": file_path,
+                        "branded_image_mode": branded_image.mode if hasattr(branded_image, 'mode') else "unknown",
+                        "branded_image_size": branded_image.size if hasattr(branded_image, 'size') else "unknown"
+                    })
+                    branded_image.save(file_path)
+                    
+                    # Verify file was created
+                    if not os.path.exists(file_path):
+                        raise FileNotFoundError(f"Image file was not created: {file_path}")
+                    
+                    # Get file size for logging
+                    file_size = os.path.getsize(file_path)
+                    
+                    logger.info("Image saved successfully", extra={
+                        "image_filename": filename,
+                        "file_path": file_path,
+                        "file_size_bytes": file_size,
+                        "file_size_mb": round(file_size / 1024 / 1024, 2)
+                    })
+                    
+                    # Track creation time and schedule cleanup
+                    image_timestamps[filename] = time.time()
+                    schedule_cleanup(file_path, filename)
+                    
+                except Exception as save_error:
+                    # Get detailed directory information
+                    dir_exists = os.path.exists(IMAGES_DIR)
+                    dir_writable = os.access(IMAGES_DIR, os.W_OK) if dir_exists else False
+                    dir_readable = os.access(IMAGES_DIR, os.R_OK) if dir_exists else False
+                    
+                    logger.error("Image saving failed - detailed diagnostics", extra={
+                        "image_filename": filename,
+                        "file_path": file_path,
+                        "images_dir": IMAGES_DIR,
+                        "images_dir_exists": dir_exists,
+                        "images_dir_writable": dir_writable,
+                        "images_dir_readable": dir_readable,
+                        "error_message": str(save_error),
+                        "error_type": type(save_error).__name__,
+                        "working_directory": os.getcwd(),
+                        "disk_space_available": "checking..."
+                    })
+                    
+                    # Additional diagnostic logging
+                    logger.error(f"CRITICAL: Image save error details - {type(save_error).__name__}: {str(save_error)}")
+                    logger.error(f"CRITICAL: Directory {IMAGES_DIR} exists: {dir_exists}, writable: {dir_writable}")
+                    
+                    raise save_error
+
+            logger.info("Image generation completed successfully", extra={
+                "image_filename": filename,
+                "total_duration_ms": round(timer.duration_ms, 2),
+                "file_size_mb": round(file_size / 1024 / 1024, 2)
+            })
+
+            return {
+                "filename": filename,
+                "download_url": f"/download/{filename}",
+                "expires_in_minutes": 10
+            }
+            
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        error_details = {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "duration_ms": round(timer.duration_ms, 2) if timer else None
+        }
+        
+        # Add traceback for debugging
+        import traceback
+        error_details["traceback"] = traceback.format_exc()
+        
+        logger.error("Unexpected error during image generation", extra=error_details)
+        logger.error(f"CRITICAL: Full error traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
 @app.get("/download/{filename}")
-def download_image(filename: str):
+def download_image(filename: str, request: Request):
     """Download endpoint for generated images"""
-    file_path = os.path.join(IMAGES_DIR, filename)
-    
-    # Check if file exists
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Image not found or has expired")
-    
-    # Check if image has expired (more than 10 minutes old)
-    if filename in image_timestamps:
-        creation_time = image_timestamps[filename]
-        if time.time() - creation_time > 600:  # 10 minutes
-            # Clean up expired image
-            try:
-                os.remove(file_path)
-                del image_timestamps[filename]
-            except:
-                pass
-            raise HTTPException(status_code=404, detail="Image has expired")
-    
-    return FileResponse(
-        path=file_path,
-        filename=filename,
-        media_type="image/png",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+    with TimingContext("image_download", logger, {"image_filename": filename}):
+        client_ip = request.client.host if request.client else "unknown"
+        logger.info("Image download request", extra={
+            "image_filename": filename,
+            "client_ip": client_ip
+        })
+        
+        file_path = os.path.join(IMAGES_DIR, filename)
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            logger.warning("Image file not found", extra={
+                "image_filename": filename,
+                "file_path": file_path,
+                "client_ip": client_ip
+            })
+            raise HTTPException(status_code=404, detail="Image not found or has expired")
+        
+        # Check if image has expired (more than 10 minutes old)
+        if filename in image_timestamps:
+            creation_time = image_timestamps[filename]
+            elapsed_time = time.time() - creation_time
+            if elapsed_time > 600:  # 10 minutes
+                logger.info("Image has expired, cleaning up", extra={
+                    "image_filename": filename,
+                    "elapsed_minutes": round(elapsed_time / 60, 1),
+                    "client_ip": client_ip
+                })
+                # Clean up expired image
+                try:
+                    os.remove(file_path)
+                    del image_timestamps[filename]
+                except Exception as e:
+                    logger.error("Error removing expired image", extra={
+                        "image_filename": filename,
+                        "error": str(e)
+                    })
+                raise HTTPException(status_code=404, detail="Image has expired")
+        
+        # Get file size for logging
+        try:
+            file_size = os.path.getsize(file_path)
+            logger.info("Image download successful", extra={
+                "image_filename": filename,
+                "client_ip": client_ip,
+                "file_size_bytes": file_size,
+                "file_size_mb": round(file_size / 1024 / 1024, 2)
+            })
+        except Exception as e:
+            logger.error("Error getting file size", extra={
+                "image_filename": filename,
+                "error": str(e)
+            })
+            file_size = 0
+        
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Length": str(file_size)
+            }
+        )
 
 @app.get("/status/{filename}")
 def check_image_status(filename: str):
