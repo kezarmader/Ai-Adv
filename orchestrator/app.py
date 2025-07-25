@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import Response
 import requests
 import json
 
@@ -87,13 +88,15 @@ async def run_ad_campaign(req: Request):
     print('image_response.json()', image_response.json())
 
     response_data = image_response.json()
-    download_url = response_data.get("download_url", "")
+    filename = response_data.get("filename", "")
     
-    if download_url == '' or download_url == None:
-        raise ValueError(f'Error generating download_url: {download_url}')
+    if filename == '' or filename == None:
+        raise ValueError(f'Error generating filename: {filename}')
     
-    # Construct full URL for the image that other services can access
-    image_url = f"http://image-generator:5001{download_url}"
+    # Get the host from the request to construct the proper external URL
+    host = req.headers.get("host", "localhost:8000")
+    # Construct URL that points to orchestrator's download endpoint
+    image_url = f"http://{host}/download/{filename}"
 
     print('constructed image_url:', image_url)
 
@@ -108,6 +111,30 @@ async def run_ad_campaign(req: Request):
         "image_url": image_url,
         "post_status": post_response.json()
     }
+
+@app.get("/download/{filename}")
+async def download_image(filename: str):
+    """Proxy endpoint to download images from image-generator service"""
+    try:
+        # Make request to image-generator service
+        image_response = requests.get(f"http://image-generator:5001/download/{filename}")
+        
+        if image_response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Image not found or has expired")
+        elif image_response.status_code != 200:
+            raise HTTPException(status_code=image_response.status_code, detail="Error fetching image")
+        
+        # Return the image content with proper headers
+        return Response(
+            content=image_response.content,
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Type": "image/png"
+            }
+        )
+    except requests.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching image: {str(e)}")
 
 import json
 

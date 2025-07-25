@@ -11,8 +11,8 @@ services:
       # OLLAMA_MAX_GPU_MEMORY: "20GiB"     # tweak for your card
     volumes:
       - ollama:/root/.ollama
-    ports:
-      - "11434:11434"
+    expose:
+      - "11434"
     networks: [app-net]
     restart: unless-stopped
     deploy:
@@ -30,8 +30,8 @@ services:
       # NVIDIA_DRIVER_CAPABILITIES: compute,utility
       # Optional PyTorch memory tuner
       # PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:128
-    ports:
-      - "5001:5001"
+    expose:
+      - "5001"
     networks: [app-net]
     restart: unless-stopped
     deploy:
@@ -43,8 +43,8 @@ services:
   poster-service:
     build: ./poster-service
     networks: [app-net]
-    ports:
-      - "5002:5002"
+    expose:
+      - "5002"
 
   orchestrator:
     build: ./orchestrator
