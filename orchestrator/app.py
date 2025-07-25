@@ -1,6 +1,5 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, BaseHTTPMiddleware
 from fastapi.responses import Response
-from fastapi.middleware.base import BaseHTTPMiddleware
 import requests
 import json
 import time

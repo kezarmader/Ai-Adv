@@ -1,5 +1,4 @@
-from fastapi import FastAPI, Request
-from fastapi.middleware.base import BaseHTTPMiddleware
+from fastapi import FastAPI, Request, BaseHTTPMiddleware
 import time
 from logging_config import setup_logging, generate_request_id, request_id
 

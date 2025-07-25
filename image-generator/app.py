@@ -1,7 +1,6 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, BaseHTTPMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from diffusers import (
     StableDiffusionXLPipeline,
