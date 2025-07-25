@@ -84,11 +84,12 @@ async def run_ad_campaign(req: Request):
     image_response = requests.post("http://image-generator:5001/generate", json=image_prompt)
     
     print('image_response', image_response)
+    print('image_response.json()', image_response.json())
 
-    image_url = image_response.json().get("url", "")
+    image_url = image_response.json().get("download_url", "")
 
     if image_url == '' or image_url == None:
-        raise('Error generating image_url', image_url)
+        raise ValueError(f'Error generating image_url: {image_url}')
 
     # Post
     post_response = requests.post("http://poster-service:5002/post", json={
