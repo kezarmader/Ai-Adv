@@ -267,6 +267,11 @@ def generate_ad(data: ImagePrompt):
                         raise PermissionError(f"No write permission for directory: {IMAGES_DIR}")
                     
                     # Save the image
+                    logger.info("Attempting to save image", extra={
+                        "file_path": file_path,
+                        "branded_image_mode": branded_image.mode if hasattr(branded_image, 'mode') else "unknown",
+                        "branded_image_size": branded_image.size if hasattr(branded_image, 'size') else "unknown"
+                    })
                     branded_image.save(file_path)
                     
                     # Verify file was created
@@ -328,11 +333,18 @@ def generate_ad(data: ImagePrompt):
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
-        logger.error("Unexpected error during image generation", extra={
+        error_details = {
             "error": str(e),
             "error_type": type(e).__name__,
             "duration_ms": round(timer.duration_ms, 2) if timer else None
-        })
+        }
+        
+        # Add traceback for debugging
+        import traceback
+        error_details["traceback"] = traceback.format_exc()
+        
+        logger.error("Unexpected error during image generation", extra=error_details)
+        logger.error(f"CRITICAL: Full error traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
 @app.get("/download/{filename}")
