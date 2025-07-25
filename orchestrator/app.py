@@ -198,7 +198,7 @@ async def run_ad_campaign(req: Request):
                 image_url = f"http://{host}/download/{filename}"
                 
                 logger.info("Image URL constructed", extra={
-                    "filename": filename,
+                    "image_filename": filename,
                     "image_url": image_url
                 })
 
@@ -258,11 +258,11 @@ async def run_ad_campaign(req: Request):
 @app.get("/download/{filename}")
 async def download_image(filename: str, request: Request):
     """Proxy endpoint to download images from image-generator service"""
-    with TimingContext("image_download", logger, {"filename": filename}) as timer:
+    with TimingContext("image_download", logger, {"image_filename": filename}) as timer:
         try:
             client_ip = request.client.host if request.client else "unknown"
             logger.info("Image download request", extra={
-                "filename": filename,
+                "image_filename": filename,
                 "client_ip": client_ip
             })
             
@@ -279,13 +279,13 @@ async def download_image(filename: str, request: Request):
             
             if image_response.status_code == 404:
                 logger.warning("Image not found", extra={
-                    "filename": filename,
+                    "image_filename": filename,
                     "client_ip": client_ip
                 })
                 raise HTTPException(status_code=404, detail="Image not found or has expired")
             elif image_response.status_code != 200:
                 logger.error("Error fetching image from generator", extra={
-                    "filename": filename,
+                    "image_filename": filename,
                     "status_code": image_response.status_code
                 })
                 raise HTTPException(status_code=image_response.status_code, detail="Error fetching image")
@@ -293,7 +293,7 @@ async def download_image(filename: str, request: Request):
             # Log successful download
             image_size = len(image_response.content)
             logger.info("Image download successful", extra={
-                "filename": filename,
+                "image_filename": filename,
                 "client_ip": client_ip,
                 "image_size_bytes": image_size,
                 "download_duration_ms": round(timer.duration_ms, 2)
@@ -314,14 +314,14 @@ async def download_image(filename: str, request: Request):
             raise
         except requests.RequestException as e:
             logger.error("Request error during image download", extra={
-                "filename": filename,
+                "image_filename": filename,
                 "error": str(e),
                 "duration_ms": round(timer.duration_ms, 2) if timer else None
             })
             raise HTTPException(status_code=500, detail=f"Error fetching image: {str(e)}")
         except Exception as e:
             logger.error("Unexpected error during image download", extra={
-                "filename": filename,
+                "image_filename": filename,
                 "error": str(e),
                 "error_type": type(e).__name__,
                 "duration_ms": round(timer.duration_ms, 2) if timer else None
