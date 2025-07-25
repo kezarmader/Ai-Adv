@@ -116,24 +116,73 @@ class ImagePrompt(BaseModel):
     scene: str
 
 
-# Utility: add branding/CTA overlays
+# Utility: add branding/CTA overlays with enhanced readability
 def add_overlay(image: Image.Image, brand: str, product: str, cta: str) -> Image.Image:
-    draw = ImageDraw.Draw(image)
+    # Create a new image for overlay with alpha channel
+    overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-    font_brand = ImageFont.truetype(font_path, 36)
-    font_product = ImageFont.truetype(font_path, 28)
-    font_cta = ImageFont.truetype(font_path, 24)
+    font_brand = ImageFont.truetype(font_path, 42)
+    font_product = ImageFont.truetype(font_path, 32)
+    font_cta = ImageFont.truetype(font_path, 28)
+    font_ai = ImageFont.truetype(font_path, 20)
 
-    # Top-left: brand and product
-    draw.text((30, 20), brand, fill="blue", font=font_brand)
-    draw.text((30, 70), product, fill="orange", font=font_product)
+    # Helper function to draw text with background box
+    def draw_text_with_background(draw, position, text, font, text_color, bg_color, padding=8):
+        x, y = position
+        # Get text dimensions
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        # Draw background rectangle with alpha
+        bg_rect = [
+            x - padding, 
+            y - padding, 
+            x + text_width + padding, 
+            y + text_height + padding
+        ]
+        draw.rectangle(bg_rect, fill=bg_color)
+        
+        # Draw text
+        draw.text((x, y), text, font=font, fill=text_color)
 
-    # Bottom-left: CTA
-    draw.text((30, image.height - 50), cta, fill="black", font=font_cta)
-    draw.text((image.width - (image.width * 0.5), image.height - 50), "AI Generated", font=font_cta)
+    # Top-left: brand with dark semi-transparent background
+    draw_text_with_background(
+        draw, (30, 30), brand, font_brand, 
+        text_color=(255, 255, 255, 255), bg_color=(0, 0, 0, 180)  # White text, black bg
+    )
+    
+    # Below brand: product with blue semi-transparent background
+    draw_text_with_background(
+        draw, (30, 90), product, font_product,
+        text_color=(255, 255, 255, 255), bg_color=(0, 100, 200, 180)  # White text, blue bg
+    )
 
-    return image
+    # Bottom-left: CTA with orange background for strong visibility
+    cta_y = image.height - 80
+    draw_text_with_background(
+        draw, (30, cta_y), cta, font_cta,
+        text_color=(255, 255, 255, 255), bg_color=(255, 100, 0, 200)  # White text, orange bg
+    )
+    
+    # Bottom-right: "AI Generated" with subtle gray background
+    ai_text = "AI Generated"
+    ai_bbox = draw.textbbox((0, 0), ai_text, font=font_ai)
+    ai_width = ai_bbox[2] - ai_bbox[0]
+    ai_x = image.width - ai_width - 30
+    ai_y = image.height - 50
+    
+    draw_text_with_background(
+        draw, (ai_x, ai_y), ai_text, font_ai,
+        text_color=(255, 255, 255, 255), bg_color=(100, 100, 100, 150)  # White text, gray bg
+    )
+
+    # Composite the overlay onto the original image
+    image = image.convert('RGBA')
+    combined = Image.alpha_composite(image, overlay)
+    return combined.convert('RGB')
 
 def trim_prompt(prompt: str, max_tokens: int = 77) -> str:
     tokens = clip_tokenizer(prompt, truncation=True, max_length=max_tokens, return_tensors="pt")
@@ -187,7 +236,10 @@ def generate_ad(data: ImagePrompt):
             log_gpu_usage(logger, "before_generation")
             # 1. Build the prompt
             with TimingContext("prompt_building", logger):
-                prompt = (f"{data.scene}")
+                # Enhanced prompt for better text readability
+                prompt = (f"{data.scene}, clean composition, balanced lighting, "
+                         f"clear areas for text overlay, high contrast, professional advertising style, "
+                         f"uncluttered layout, space for branding elements")
                 prompt = trim_prompt(prompt)
                 logger.info("Prompt prepared", extra={
                     "original_scene_length": len(data.scene),
