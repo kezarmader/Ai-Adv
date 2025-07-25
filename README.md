@@ -5,7 +5,27 @@ A microservices-based AI application that generates product advertisements using
 ## 📋 Table of Contents
 
 - [🏗️ Architecture](#️-architecture)
-- [⚠️ Privacy & Data Disclaimer](#️-privacy--data-disclaimer)
+- [⚠️ Privacy & Data Discl## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### MIT License Summary
+- ✅ **Commercial use** - You can use this software commercially
+- ✅ **Modification** - You can modify the source code
+- ✅ **Distribution** - You can distribute the software
+- ✅ **Private use** - You can use this software privately
+- ⚠️ **Liability** - The software is provided "as is" without warranty
+- ⚠️ **Attribution** - You must include the original license and copyright notice
+
+### Third-Party Components
+This project uses several open-source components:
+- **FastAPI** (MIT License)
+- **Stable Diffusion XL** (CreativeML Open RAIL++-M License)
+- **Ollama** (MIT License)
+- **Docker** (Apache 2.0 License)
+- **PyTorch** (BSD License)
+
+Please review the individual licenses of these components for their specific terms and conditions.er](#️-privacy--data-disclaimer)
 - [🌐 Live Demo](#-live-demo)
 - [🛠️ Prerequisites](#️-prerequisites)
 - [🚀 Quick Start](#-quick-start)
@@ -443,7 +463,122 @@ docker-compose down -v && docker-compose up --build
 
 ## 🤝 Contributing
 
-[Add contribution guidelines here]
+We welcome contributions to the AI Advertisement Generator! Here's how you can help:
+
+### 🚀 Ways to Contribute
+
+- **🐛 Bug Reports** - Found a bug? Please open an issue with detailed reproduction steps
+- **💡 Feature Requests** - Have an idea? Share it in the issues section
+- **📝 Documentation** - Help improve documentation and examples
+- **🔧 Code Contributions** - Submit pull requests for bug fixes or new features
+- **🧪 Testing** - Help test the application on different hardware configurations
+- **🎨 UI/UX** - Improve the API documentation or add web interfaces
+
+### 📋 Development Setup
+
+1. **Fork the repository**
+2. **Create a feature branch**:
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+3. **Set up development environment**:
+   ```powershell
+   # Clone your fork
+   git clone https://github.com/your-username/Ai-Adv.git
+   cd Ai-Adv
+   
+   # Install dependencies
+   pip install -r orchestrator/requirements.txt
+   pip install -r image-generator/requirements.txt
+   pip install -r poster-service/requirements.txt
+   ```
+
+### 🔧 Coding Standards
+
+- **Python**: Follow PEP 8 style guidelines
+- **Logging**: Use structured logging (see `logging_config.py`)
+- **Error Handling**: Include proper exception handling with context
+- **Documentation**: Add docstrings to functions and classes
+- **Testing**: Include tests for new features
+
+### 📝 Pull Request Process
+
+1. **Update documentation** if you're changing functionality
+2. **Add tests** for new features or bug fixes
+3. **Run the health check**: `.\health_check.ps1` before submitting
+4. **Update CHANGELOG.md** with your changes
+5. **Submit a pull request** with:
+   - Clear description of changes
+   - Screenshots/logs if applicable
+   - Reference to related issues
+
+### 🐛 Reporting Issues
+
+When reporting bugs, please include:
+- **Environment details** (OS, Docker version, GPU model)
+- **Error logs** (use `docker-compose logs` output)
+- **Steps to reproduce** the issue
+- **Expected vs actual behavior**
+
+**Example issue template:**
+```markdown
+**Bug Description**: Brief description of the issue
+
+**Environment**:
+- OS: Windows 11
+- Docker Desktop: v4.x.x
+- GPU: RTX 4090
+- VRAM: 24GB
+
+**Steps to Reproduce**:
+1. Start services with `docker-compose up`
+2. Send request to /run endpoint
+3. Error occurs during image generation
+
+**Error Logs**:
+```
+[Paste relevant logs here]
+```
+
+**Expected Behavior**: What should have happened
+**Actual Behavior**: What actually happened
+```
+
+### 🏷️ Issue Labels
+
+- `bug` - Something isn't working
+- `enhancement` - New feature or request
+- `documentation` - Improvements to documentation
+- `good first issue` - Good for newcomers
+- `help wanted` - Extra attention is needed
+- `performance` - Performance improvements
+- `security` - Security-related issues
+
+### 🌟 Recognition
+
+Contributors will be recognized in:
+- GitHub contributors list
+- CHANGELOG.md for significant contributions
+- Special thanks in release notes
+
+### 📞 Getting Help
+
+- **General questions**: Open a discussion in GitHub Discussions
+- **Bug reports**: Create an issue with the bug template
+- **Feature requests**: Create an issue with the feature template
+- **Security issues**: Email the maintainers directly
+
+For detailed contribution guidelines, see **[CONTRIBUTING.md](CONTRIBUTING.md)**
+
+### 🔒 Code of Conduct
+
+This project follows the [Contributor Covenant Code of Conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). By participating, you agree to uphold this code.
+
+**In summary**: Be respectful, inclusive, and constructive in all interactions.
+
+---
+
+Thank you for contributing to the AI Advertisement Generator! 🎉
 
 ---
 
