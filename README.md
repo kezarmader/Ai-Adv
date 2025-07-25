@@ -2,6 +2,19 @@
 
 A microservices-based AI application that generates product advertisements using Large Language Models (LLM) and Stable Diffusion image generation. The system automatically creates ad copy and corresponding visuals for products based on user input, with secure temporary image storage and download capabilities.
 
+## 📋 Table of Contents
+
+- [🏗️ Architecture](#️-architecture)
+- [⚠️ Privacy & Data Disclaimer](#️-privacy--data-disclaimer)
+- [🌐 Live Demo](#-live-demo)
+- [🛠️ Prerequisites](#️-prerequisites)
+- [🚀 Quick Start](#-quick-start)
+- [📝 Usage](#-usage)
+- [🔧 Configuration](#-configuration)
+- [📊 Monitoring & Logs](#-monitoring--logs)
+- [🐛 Troubleshooting](#-troubleshooting)
+- [🔄 Development](#-development)
+
 ## 🏗️ Architecture
 
 The application consists of 4 microservices:
@@ -22,6 +35,13 @@ The application consists of 4 microservices:
 - **This is intended for product marketing content only** - avoid any content that could be harmful, inappropriate, or violate terms of service
 
 By using this service, you acknowledge that you understand these limitations and agree to use the service responsibly.
+
+### 🔒 Additional Security Features
+- **Request tracking**: Each request has a unique ID for debugging (no personal data stored)
+- **Automatic cleanup**: Generated images are deleted after 10 minutes
+- **No data persistence**: No user inputs are permanently stored
+- **Local processing**: All AI processing happens locally (no data sent to external services)
+- **Network isolation**: Services communicate only within Docker network
 
 ## 🌐 Live Demo
 
@@ -50,7 +70,7 @@ If the demo is unavailable, you can deploy the service locally using the instruc
 
 ### 1. Clone the Repository
 ```powershell
-git clone <repository-url>
+git clone https://github.com/kezarmader/Ai-Adv.git
 cd Ai-Adv
 ```
 
@@ -92,8 +112,18 @@ You should see:
 
 ### Generate an Advertisement
 
-Send a POST request to the orchestrator:
+Send a POST request to the orchestrator with the following fields:
 
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `product` | string | Yes | Name/description of the product |
+| `audience` | string | Yes | Target audience for the ad |
+| `tone` | string | Yes | Desired tone (e.g., "professional", "energetic", "friendly") |
+| `ASIN` | string | Yes | Amazon product ID (for reference) |
+| `brand_text` | string | Yes | Brand name to display on image |
+| `cta_text` | string | Yes | Call-to-action text for the image |
+
+**Example using curl:**
 ```powershell
 # Using curl (if available)
 curl -X POST "http://localhost:8000/run" `
@@ -108,7 +138,7 @@ curl -X POST "http://localhost:8000/run" `
   }'
 ```
 
-Or using PowerShell with Invoke-RestMethod:
+**Example using PowerShell:**
 ```powershell
 $body = @{
     product = "Wireless Bluetooth Headphones"
@@ -124,16 +154,23 @@ Invoke-RestMethod -Uri "http://localhost:8000/run" -Method Post -Body $body -Con
 
 ### Expected Response
 The API will return a JSON object containing:
-- Generated ad copy
-- Image download URL for the generated product image (valid for 10 minutes)
-- Posting status from the poster service
+- **ad_text**: Complete generated advertisement with product details, features, and scene description
+- **image_url**: Download URL for the generated product image (valid for 10 minutes)  
+- **post_status**: Status from the mock posting service
 
 Example response:
 ```json
 {
-  "ad_copy": "Unleash your potential with SoundFit Pro Wireless Bluetooth Headphones...",
+  "ad_text": {
+    "product": "Wireless Bluetooth Headphones",
+    "audience": ["fitness enthusiasts"],
+    "tone": "energetic and motivating",
+    "description": "Unleash your potential with SoundFit Pro Wireless Bluetooth Headphones...",
+    "features": ["Crystal Clear Audio", "30-Hour Battery", "Sweat Resistant"],
+    "scene": "A fitness enthusiast wearing headphones during an intense workout session"
+  },
   "image_url": "http://localhost:8000/download/a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
-  "post_status": {"status": "success", "message": "Ad posted successfully"}
+  "post_status": {"status": "success", "message": "Advertisement posted successfully to mock platform"}
 }
 ```
 
@@ -145,6 +182,16 @@ Invoke-WebRequest -Uri "http://localhost:8000/download/[filename].png" -OutFile 
 ```
 
 **Note**: Generated images are automatically deleted after 10 minutes for security and storage management.
+
+### Performance Expectations
+Typical response times (varies by hardware):
+- **First request**: 60-120 seconds (model loading)
+- **Subsequent requests**: 15-30 seconds
+- **LLM generation**: 5-15 seconds  
+- **Image generation**: 8-20 seconds
+- **Image download**: <1 second
+
+Response times depend on GPU performance and available VRAM.
 
 ## 🔧 Configuration
 
@@ -199,6 +246,19 @@ docker-compose logs -f | Select-String '"level":"ERROR"'
 
 # Performance analysis (requests >10 seconds)
 docker-compose logs | Select-String '"duration_ms":[0-9]{5,}'
+```
+
+### Log Management
+For production deployments, consider log rotation:
+```yaml
+# Add to docker-compose.yml
+services:
+  orchestrator:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 ```
 
 ### Performance Metrics
@@ -287,6 +347,22 @@ Invoke-RestMethod -Uri "http://localhost:11434/api/tags"  # Ollama models
    - Check service health: `Invoke-RestMethod -Uri "http://localhost:8000/docs"`
    - Review resource usage and restart services if needed
 
+8. **Permission Errors (Windows)**
+   ```
+   Access denied or file in use errors
+   ```
+   - Run PowerShell as Administrator
+   - Ensure Docker Desktop is running with proper permissions
+   - Check Windows Defender or antivirus interference
+
+9. **Network Connectivity Issues**
+   ```
+   Services can't communicate
+   ```
+   - Verify Docker network: `docker network ls`
+   - Check firewall settings
+   - Restart Docker Desktop if needed
+
 ### Debug Mode
 Enable verbose logging by adding to service environment:
 ```yaml
@@ -329,7 +405,39 @@ Once running, visit:
 - **POST /run**: Generate complete advertisement (copy + image)
 - **GET /download/{filename}**: Download generated images (expires in 10 minutes)
 
-## 📄 License
+## � Quick Reference
+
+### Essential Commands
+```powershell
+# Start services
+docker-compose up --build
+
+# Check status
+.\health_check.ps1
+
+# View logs
+docker-compose logs -f
+
+# Stop services  
+docker-compose down
+
+# Clean restart
+docker-compose down -v && docker-compose up --build
+```
+
+### Service URLs
+- **Main API**: http://localhost:8000 (see /docs for API documentation)
+- **LLM Service**: http://localhost:11434 (Ollama)
+- **Image Generator**: http://localhost:5001 (see /docs)
+- **Poster Service**: http://localhost:5002 (see /docs)
+
+### Important Files
+- `docker-compose.yml` - Service configuration
+- `LOGGING.md` - Detailed logging documentation  
+- `health_check.ps1` - Health monitoring script
+- `CODE_REVIEW_SUMMARY.md` - Development notes
+
+## �📄 License
 
 [Add your license information here]
 
