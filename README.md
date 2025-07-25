@@ -23,6 +23,17 @@ The application consists of 4 microservices:
 
 By using this service, you acknowledge that you understand these limitations and agree to use the service responsibly.
 
+## 🌐 Live Demo
+
+**Try the service online**: [http://madhouse53.duckdns.org/](http://madhouse53.duckdns.org/)
+
+**⚠️ Availability Notice**: 
+- This demo service is subject to server availability
+- The server may be offline during maintenance or when not in use
+- For guaranteed access, you can rent the machine from [vast.ai](https://vast.ai) using **Machine ID: 37958**
+
+If the demo is unavailable, you can deploy the service locally using the instructions below.
+
 ## 🛠️ Prerequisites
 
 ### Hardware Requirements
