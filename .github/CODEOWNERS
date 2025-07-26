@@ -1,0 +1,16 @@
+# Global code owners - all files require review from repository owner
+* @kezarmader
+
+# Service-specific ownership
+/orchestrator/ @kezarmader
+/image-generator/ @kezarmader
+/poster-service/ @kezarmader
+
+# Configuration files require extra attention
+docker-compose.yml @kezarmader
+*.dockerfile @kezarmader
+Dockerfile @kezarmader
+requirements.txt @kezarmader
+
+# GitHub configuration
+/.github/ @kezarmader
