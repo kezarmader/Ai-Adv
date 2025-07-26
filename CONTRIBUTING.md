@@ -151,28 +151,7 @@ async def endpoint_function(data: RequestModel):
 5. **Update CHANGELOG.md**: Add your changes under `[Unreleased]`
 
 ### PR Description Template
-```markdown
-## Summary
-Brief description of changes made.
-
-## Type of Change
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
-
-## Testing Performed
-- [ ] Health check script passes
-- [ ] Manual testing of changed functionality
-- [ ] Log output verified for errors
-- [ ] Performance impact assessed
-
-## Screenshots/Logs
-[Include relevant screenshots or log outputs if applicable]
-
-## Related Issues
-Fixes #[issue number]
-```
+When creating a pull request, GitHub will automatically load the PR template with the required sections. Make sure to fill out all relevant sections completely.
 
 ### Review Process
 1. **Automated checks** must pass
