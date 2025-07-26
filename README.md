@@ -5,27 +5,7 @@ A microservices-based AI application that generates product advertisements using
 ## 📋 Table of Contents
 
 - [🏗️ Architecture](#️-architecture)
-- [⚠️ Privacy & Data Discl## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-### MIT License Summary
-- ✅ **Commercial use** - You can use this software commercially
-- ✅ **Modification** - You can modify the source code
-- ✅ **Distribution** - You can distribute the software
-- ✅ **Private use** - You can use this software privately
-- ⚠️ **Liability** - The software is provided "as is" without warranty
-- ⚠️ **Attribution** - You must include the original license and copyright notice
-
-### Third-Party Components
-This project uses several open-source components:
-- **FastAPI** (MIT License)
-- **Stable Diffusion XL** (CreativeML Open RAIL++-M License)
-- **Ollama** (MIT License)
-- **Docker** (Apache 2.0 License)
-- **PyTorch** (BSD License)
-
-Please review the individual licenses of these components for their specific terms and conditions.er](#️-privacy--data-disclaimer)
+- [⚠️ Privacy & Data Disclaimer](#️-privacy--data-disclaimer)
 - [🌐 Live Demo](#-live-demo)
 - [🛠️ Prerequisites](#️-prerequisites)
 - [🚀 Quick Start](#-quick-start)
@@ -34,6 +14,7 @@ Please review the individual licenses of these components for their specific ter
 - [📊 Monitoring & Logs](#-monitoring--logs)
 - [🐛 Troubleshooting](#-troubleshooting)
 - [🔄 Development](#-development)
+- [📄 License](#-license)
 
 ## 🏗️ Architecture
 
@@ -457,9 +438,27 @@ docker-compose down -v && docker-compose up --build
 - `health_check.ps1` - Health monitoring script
 - `CODE_REVIEW_SUMMARY.md` - Development notes
 
-## �📄 License
+## 📄 License
 
-[Add your license information here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### MIT License Summary
+- ✅ **Commercial use** - You can use this software commercially
+- ✅ **Modification** - You can modify the source code
+- ✅ **Distribution** - You can distribute the software
+- ✅ **Private use** - You can use this software privately
+- ⚠️ **Liability** - The software is provided "as is" without warranty
+- ⚠️ **Attribution** - You must include the original license and copyright notice
+
+### Third-Party Components
+This project uses several open-source components:
+- **FastAPI** (MIT License)
+- **Stable Diffusion XL** (CreativeML Open RAIL++-M License)
+- **Ollama** (MIT License)
+- **Docker** (Apache 2.0 License)
+- **PyTorch** (BSD License)
+
+Please review the individual licenses of these components for their specific terms and conditions.
 
 ## 🤝 Contributing
 
