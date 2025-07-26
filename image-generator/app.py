@@ -17,7 +17,7 @@ from logging_config import (
 )
 
 # Setup structured logging
-logger = setup_logging("image-generator", "INFO")
+logger = setup_logging("image-generator", "INFO" )
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     """Middleware to log all HTTP requests and responses"""
