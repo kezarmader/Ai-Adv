@@ -4,13 +4,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import requests
 import json
 import time
+import logging
 from logging_config import (
     setup_logging, TimingContext, generate_request_id, request_id,
     log_request_details, log_response_details, log_external_api_call
 )
 
 # Setup structured logging
-logger = setup_logging("orchestrator", "INFO")
+logger = setup_logging("orchestrator", "DEBUG")
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     """Middleware to log all HTTP requests and responses"""
@@ -250,7 +251,15 @@ async def run_ad_campaign(req: Request):
                 # Parse LLM response
                 with TimingContext("llm_response_parsing", logger):
                     try:
-                        ad_text = parse_llm_json_response(llm_response.text.strip())
+                        raw_response = llm_response.text.strip()
+                        logger.debug("Raw LLM response received", extra={
+                            "attempt": attempt + 1,
+                            "response_length": len(raw_response),
+                            "response_preview": raw_response[:200] + "..." if len(raw_response) > 200 else raw_response,
+                            "response_ends_with": raw_response[-50:] if len(raw_response) > 50 else raw_response
+                        })
+                        
+                        ad_text = parse_llm_json_response(raw_response)
                         logger.info("LLM response parsed successfully", extra={
                             "attempt": attempt + 1,
                             "product_parsed": ad_text.get('product'),
@@ -265,7 +274,9 @@ async def run_ad_campaign(req: Request):
                         logger.warning("JSON parsing failed", extra={
                             "attempt": attempt + 1,
                             "error": last_error,
-                            "will_retry": attempt < max_retries - 1
+                            "will_retry": attempt < max_retries - 1,
+                            "raw_response_length": len(last_response),
+                            "raw_response_preview": last_response[:300] + "..." if len(last_response) > 300 else last_response
                         })
                         
                         if attempt == max_retries - 1:
@@ -276,6 +287,26 @@ async def run_ad_campaign(req: Request):
                                 "final_response": last_response[:500] + "..." if len(last_response) > 500 else last_response
                             })
                             raise HTTPException(status_code=500, detail=f"LLM failed to generate valid JSON after {max_retries} attempts: {last_error}")
+                    except Exception as e:
+                        # Catch any other unexpected errors during parsing
+                        last_error = str(e)
+                        last_response = llm_response.text.strip()
+                        logger.error("Unexpected error during LLM response parsing", extra={
+                            "attempt": attempt + 1,
+                            "error": last_error,
+                            "error_type": type(e).__name__,
+                            "raw_response_length": len(last_response),
+                            "raw_response_preview": last_response[:300] + "..." if len(last_response) > 300 else last_response
+                        })
+                        
+                        if attempt == max_retries - 1:
+                            logger.error("All LLM retry attempts failed due to unexpected error", extra={
+                                "total_attempts": max_retries,
+                                "final_error": last_error,
+                                "final_error_type": type(e).__name__
+                            })
+                            raise HTTPException(status_code=500, detail=f"LLM parsing failed with unexpected error after {max_retries} attempts: {last_error}")
+                        # Continue to next retry attempt for unexpected errors too
             
             if ad_text is None:
                 raise HTTPException(status_code=500, detail="Failed to parse LLM response after all retry attempts")
@@ -373,10 +404,12 @@ async def run_ad_campaign(req: Request):
         })
         raise HTTPException(status_code=503, detail=f"External service error: {str(e)}")
     except Exception as e:
+        import traceback
         logger.error("Unexpected error in ad generation", extra={
             "error": str(e),
             "error_type": type(e).__name__,
-            "duration_ms": round(timer.duration_ms, 2) if timer else None
+            "duration_ms": round(timer.duration_ms, 2) if timer else None,
+            "traceback": traceback.format_exc() if logger.isEnabledFor(logging.DEBUG) else None
         })
         raise HTTPException(status_code=500, detail="Internal server error")
 
