@@ -56,6 +56,96 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 app = FastAPI(title="AI Advertisement Generator - Orchestrator", version="1.0.0")
 app.add_middleware(LoggingMiddleware)
 
+def create_json_fix_prompt(original_context: str, error_message: str, failed_response: str) -> str:
+    """Create a prompt asking the LLM to fix its JSON response"""
+    return f"""CRITICAL ERROR CORRECTION NEEDED: Your previous response had JSON parsing errors.
+
+ERROR: {error_message}
+
+YOUR PREVIOUS RESPONSE:
+{failed_response}
+
+ORIGINAL REQUEST:
+{original_context}
+
+INSTRUCTIONS FOR CORRECTION:
+1. You MUST output ONLY a valid JSON object - nothing else
+2. Fix the JSON syntax errors from your previous response
+3. Ensure all quotes are properly escaped
+4. Remove any trailing commas
+5. Ensure all brackets and braces are properly closed
+6. Do NOT include any explanatory text, markdown formatting, or code blocks
+7. Start directly with {{ and end with }}
+
+The JSON must contain these exact keys:
+- "product": string
+- "audience": string or list of strings  
+- "tone": string
+- "description": string
+- "features": list of strings
+- "scene": string (detailed image generation prompt)
+
+OUTPUT ONLY THE CORRECTED JSON NOW:"""
+
+def parse_llm_json_response(response: str) -> dict:
+    """Parse JSON response from LLM with minimal processing"""
+    try:
+        # First, try to parse the outer response structure
+        response_obj = json.loads(response)
+        
+        # Extract the actual content
+        if isinstance(response_obj, dict) and "response" in response_obj:
+            json_content = response_obj["response"]
+        else:
+            json_content = response
+            
+        logger.debug("Extracted JSON content from LLM response", extra={
+            "content_length": len(json_content),
+            "content_preview": json_content[:200] + "..." if len(json_content) > 200 else json_content
+        })
+        
+        # Try to parse the actual JSON content
+        try:
+            parsed_data = json.loads(json_content)
+            
+            # Validate required fields
+            required_fields = ["product", "audience", "tone", "description", "features", "scene"]
+            missing_fields = [field for field in required_fields if field not in parsed_data]
+            
+            if missing_fields:
+                raise ValueError(f"Missing required fields in JSON response: {missing_fields}")
+            
+            logger.info("JSON response parsed and validated successfully", extra={
+                "parsed_keys": list(parsed_data.keys()),
+                "product": parsed_data.get('product'),
+                "features_count": len(parsed_data.get('features', []))
+            })
+            
+            return parsed_data
+            
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse JSON content", extra={
+                "parse_error": str(e),
+                "json_content": json_content,
+                "error_position": getattr(e, 'pos', None)
+            })
+            raise ValueError(f"Invalid JSON format: {str(e)}")
+            
+    except json.JSONDecodeError as e:
+        # Response itself is not valid JSON
+        logger.error("Failed to parse LLM response structure", extra={
+            "parse_error": str(e),
+            "response_preview": response[:500] + "..." if len(response) > 500 else response
+        })
+        raise ValueError(f"LLM response is not valid JSON: {str(e)}")
+    except Exception as e:
+        logger.error("Unexpected error parsing LLM response", extra={
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "response_preview": response[:500] + "..." if len(response) > 500 else response
+        })
+        raise ValueError(f"Unexpected error parsing LLM response: {str(e)}")
+
 @app.post("/run")
 async def run_ad_campaign(req: Request):
     """Generate a complete advertisement with copy and image"""
@@ -127,33 +217,68 @@ async def run_ad_campaign(req: Request):
                 - Include leading/trailing newlines or explanation
                """
 
-            # LLM call to Ollama
-            with TimingContext("llm_generation", logger, {"model": "llama3"}) as llm_timer:
-                start_time = time.time()
-                llm_response = requests.post("http://llm-service:11434/api/generate", json={
-                    "model": "llama3",
-                    "prompt": context,
-                    "stream": False
-                })
-                duration_ms = (time.time() - start_time) * 1000
-                
-                log_external_api_call(
-                    logger, "llm-service", "/api/generate", "POST",
-                    response_status=llm_response.status_code,
-                    duration_ms=round(duration_ms, 2)
-                )
-                
-                if llm_response.status_code != 200:
-                    raise HTTPException(status_code=500, detail=f"LLM service error: {llm_response.status_code}")
+            # LLM call to Ollama with retry logic for JSON errors
+            max_retries = 3
+            ad_text = None
+            last_error = None
+            last_response = None
+            
+            for attempt in range(max_retries):
+                with TimingContext("llm_generation", logger, {"model": "llama3", "attempt": attempt + 1}) as llm_timer:
+                    start_time = time.time()
+                    
+                    # Use original context for first attempt, error correction for retries
+                    prompt_to_use = context if attempt == 0 else create_json_fix_prompt(context, last_error, last_response)
+                    
+                    llm_response = requests.post("http://llm-service:11434/api/generate", json={
+                        "model": "llama3",
+                        "prompt": prompt_to_use,
+                        "stream": False
+                    })
+                    duration_ms = (time.time() - start_time) * 1000
+                    
+                    log_external_api_call(
+                        logger, "llm-service", "/api/generate", "POST",
+                        response_status=llm_response.status_code,
+                        duration_ms=round(duration_ms, 2),
+                        extra_data={"attempt": attempt + 1, "is_retry": attempt > 0}
+                    )
+                    
+                    if llm_response.status_code != 200:
+                        raise HTTPException(status_code=500, detail=f"LLM service error: {llm_response.status_code}")
 
-            # Parse LLM response
-            with TimingContext("llm_response_parsing", logger):
-                ad_text = parse_llm_escaped_json(llm_response.text.strip())
-                logger.info("LLM response parsed successfully", extra={
-                    "product_parsed": ad_text.get('product'),
-                    "features_count": len(ad_text.get('features', [])),
-                    "scene_length": len(ad_text.get('scene', ''))
-                })
+                # Parse LLM response
+                with TimingContext("llm_response_parsing", logger):
+                    try:
+                        ad_text = parse_llm_json_response(llm_response.text.strip())
+                        logger.info("LLM response parsed successfully", extra={
+                            "attempt": attempt + 1,
+                            "product_parsed": ad_text.get('product'),
+                            "features_count": len(ad_text.get('features', [])),
+                            "scene_length": len(ad_text.get('scene', ''))
+                        })
+                        break  # Success, exit retry loop
+                        
+                    except ValueError as e:
+                        last_error = str(e)
+                        last_response = llm_response.text.strip()
+                        logger.warning("JSON parsing failed", extra={
+                            "attempt": attempt + 1,
+                            "error": last_error,
+                            "will_retry": attempt < max_retries - 1
+                        })
+                        
+                        if attempt == max_retries - 1:
+                            # Final attempt failed
+                            logger.error("All LLM retry attempts failed", extra={
+                                "total_attempts": max_retries,
+                                "final_error": last_error,
+                                "final_response": last_response[:500] + "..." if len(last_response) > 500 else last_response
+                            })
+                            raise HTTPException(status_code=500, detail=f"LLM failed to generate valid JSON after {max_retries} attempts: {last_error}")
+            
+            if ad_text is None:
+                raise HTTPException(status_code=500, detail="Failed to parse LLM response after all retry attempts")
 
             # Prepare image generation prompt
             image_prompt = {
@@ -327,123 +452,3 @@ async def download_image(filename: str, request: Request):
                 "duration_ms": round(timer.duration_ms, 2) if timer else None
             })
             raise HTTPException(status_code=500, detail="Internal server error")
-
-import json
-
-def parse_llm_escaped_json(response):
-    """Parse JSON response from LLM with error handling and logging"""
-    try:
-        response_obj = json.loads(response)
-        logger.debug("LLM response object parsed", extra={
-            "response_keys": list(response_obj.keys()) if isinstance(response_obj, dict) else None
-        })
-
-        # Step 1: Get the raw string containing escaped JSON
-        raw_json_str = response_obj.get("response")
-        clean_json = raw_json_str
-
-        if not clean_json:
-            logger.error("Missing 'response' key in LLM output", extra={
-                "available_keys": list(response_obj.keys()) if isinstance(response_obj, dict) else None,
-                "full_response": response[:500] + "..." if len(response) > 500 else response
-            })
-            raise ValueError("Missing 'response' key in LLM output")
-
-        logger.debug("Raw JSON extracted from LLM response", extra={
-            "json_length": len(clean_json),
-            "json_preview": clean_json[:300] + "..." if len(clean_json) > 300 else clean_json
-        })
-        
-        # Step 2: Try to clean up common JSON issues before parsing
-        try:
-            # First attempt: direct parsing
-            unescaped = json.loads(clean_json)
-            logger.info("LLM JSON response parsed successfully", extra={
-                "parsed_keys": list(unescaped.keys()) if isinstance(unescaped, dict) else None,
-                "product": unescaped.get('product') if isinstance(unescaped, dict) else None
-            })
-            return unescaped
-            
-        except json.JSONDecodeError as e:
-            logger.warning("Initial JSON parse failed, attempting repair", extra={
-                "parse_error": str(e),
-                "error_line": e.lineno if hasattr(e, 'lineno') else None,
-                "error_column": e.colno if hasattr(e, 'colno') else None,
-                "error_position": e.pos if hasattr(e, 'pos') else None
-            })
-            
-            # Try common fixes
-            repaired_json = clean_json
-            
-            # Fix 1: Remove trailing commas
-            import re
-            repaired_json = re.sub(r',(\s*[}\]])', r'\1', repaired_json)
-            
-            # Fix 2: Remove control characters except newlines and tabs
-            repaired_json = ''.join(char for char in repaired_json if ord(char) >= 32 or char in '\n\t')
-            
-            # Fix 3: Try to fix common quote issues
-            repaired_json = repaired_json.replace('"', '"').replace('"', '"')
-            repaired_json = repaired_json.replace("'", '"')
-            
-            logger.info("Attempting to parse repaired JSON", extra={
-                "original_length": len(clean_json),
-                "repaired_length": len(repaired_json),
-                "repaired_preview": repaired_json[:300] + "..." if len(repaired_json) > 300 else repaired_json
-            })
-            
-            try:
-                unescaped = json.loads(repaired_json)
-                logger.info("LLM JSON response parsed successfully after repair", extra={
-                    "parsed_keys": list(unescaped.keys()) if isinstance(unescaped, dict) else None,
-                    "product": unescaped.get('product') if isinstance(unescaped, dict) else None
-                })
-                return unescaped
-                
-            except json.JSONDecodeError as repair_error:
-                logger.error("Failed to decode JSON even after repair attempts", extra={
-                    "original_error": str(e),
-                    "repair_error": str(repair_error),
-                    "raw_json_full": clean_json,
-                    "repaired_json_full": repaired_json,
-                    "json_lines": clean_json.split('\n')[:10]  # First 10 lines for debugging
-                })
-                raise ValueError(f"Failed to decode JSON from response: {e}")
-            
-    except json.JSONDecodeError as e:
-        logger.error("Failed to parse initial LLM response", extra={
-            "json_decode_error": str(e),
-            "response_preview": response[:500] + "..." if len(response) > 500 else response,
-            "response_full": response  # Full response for debugging
-        })
-        raise ValueError(f"Failed to parse LLM response: {e}")
-    except Exception as e:
-        logger.error("Unexpected error parsing LLM response", extra={
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "response_preview": response[:500] + "..." if len(response) > 500 else response
-        })
-        raise ValueError(f"Unexpected error parsing LLM response: {e}")
-
-import re
-
-def extract_json_from_llm_response(inner_str: str) -> dict:
-    print('inner str', inner_str)
-    # ---------- STEP 2 ─ unescape inner JSON --------
-    try:
-        # Un‑escape \" and \n etc.
-        inner_str = json.loads(inner_str)
-    except json.JSONDecodeError:
-        # It might already be raw JSON; keep going
-        pass
-
-    # ---------- STEP 3 ─ strip trailing commas ------
-    inner_str = re.sub(r",\s*(\}|\])", r"\1", inner_str, flags=re.MULTILINE)
-    inner_str = re.sub(r'[“”‘’]', '"', inner_str)
-
-    # ---------- STEP 4 ─ final parse ----------------
-    try:
-        inner_json = json.loads(inner_str)
-        return inner_json
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Cleaned JSON still invalid: {e}")
