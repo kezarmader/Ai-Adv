@@ -66,9 +66,18 @@ def setup_logging(service_name: str = "orchestrator", log_level: str = "INFO"):
             if req_id:
                 log_entry["request_id"] = req_id
                 
-            # Add extra fields if present
-            if hasattr(record, 'extra'):
-                log_entry.update(record.extra)
+            # Add extra fields if present - they are added directly to the record object
+            # We need to filter out standard logging attributes and only include custom ones
+            standard_attrs = {
+                'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 'filename', 
+                'module', 'lineno', 'funcName', 'created', 'msecs', 'relativeCreated', 
+                'thread', 'threadName', 'processName', 'process', 'getMessage', 
+                'exc_info', 'exc_text', 'stack_info', 'taskName'
+            }
+            
+            for key, value in record.__dict__.items():
+                if key not in standard_attrs:
+                    log_entry[key] = value
                 
             # Add exception info if present
             if record.exc_info:
