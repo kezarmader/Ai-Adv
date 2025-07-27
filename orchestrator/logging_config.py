@@ -170,7 +170,8 @@ def log_response_details(logger: logging.Logger, status_code: int, response_size
 
 def log_external_api_call(logger: logging.Logger, service: str, endpoint: str, method: str = "POST",
                          request_data: Optional[Dict] = None, response_status: Optional[int] = None,
-                         duration_ms: Optional[float] = None, error: Optional[str] = None):
+                         duration_ms: Optional[float] = None, error: Optional[str] = None,
+                         extra_data: Optional[Dict] = None):
     """Log external API calls"""
     log_data = {
         "event": "external_api_call",
@@ -180,6 +181,10 @@ def log_external_api_call(logger: logging.Logger, service: str, endpoint: str, m
         "response_status": response_status,
         "duration_ms": duration_ms
     }
+    
+    # Add any extra data
+    if extra_data:
+        log_data.update(extra_data)
     
     if request_data:
         # Log request data size instead of full data for privacy
