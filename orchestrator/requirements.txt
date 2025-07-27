@@ -3,4 +3,8 @@ uvicorn[standard]==0.29.0
 requests
 python-json-logger
 starlette
+json-repair==0.48.0
+outlines==1.1.1
+guidance==0.2.4
+pydantic==2.5.0
 
