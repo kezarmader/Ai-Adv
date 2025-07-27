@@ -7,7 +7,7 @@ import time
 import logging
 from logging_config import (
     setup_logging, TimingContext, generate_request_id, request_id,
-    log_request_details, log_response_details, log_external_api_call
+    log_request_details, log_response_details
 )
 
 # Setup structured logging
@@ -253,15 +253,10 @@ async def run_ad_campaign(req: Request):
                     logger.debug("LLM response received", extra={
                         "status_code": llm_response.status_code,
                         "response_headers": dict(llm_response.headers),
-                        "duration_ms": round(duration_ms, 2)
+                        "duration_ms": round(duration_ms, 2),
+                        "attempt": attempt + 1,
+                        "is_retry": attempt > 0
                     })
-                    
-                    log_external_api_call(
-                        logger, "llm-service", "/api/generate", "POST",
-                        response_status=llm_response.status_code,
-                        duration_ms=round(duration_ms, 2),
-                        extra_data={"attempt": attempt + 1, "is_retry": attempt > 0}
-                    )
                     
                     if llm_response.status_code != 200:
                         logger.error("LLM service error", extra={"status_code": llm_response.status_code})
@@ -349,12 +344,13 @@ async def run_ad_campaign(req: Request):
                 image_response = requests.post("http://image-generator:5001/generate", json=image_prompt)
                 duration_ms = (time.time() - start_time) * 1000
                 
-                log_external_api_call(
-                    logger, "image-generator", "/generate", "POST",
-                    request_data=image_prompt,
-                    response_status=image_response.status_code,
-                    duration_ms=round(duration_ms, 2)
-                )
+                logger.info("Image generation request completed", extra={
+                    "service": "image-generator",
+                    "endpoint": "/generate",
+                    "status_code": image_response.status_code,
+                    "duration_ms": round(duration_ms, 2),
+                    "prompt_size": len(json.dumps(image_prompt))
+                })
                 
                 if image_response.status_code != 200:
                     raise HTTPException(status_code=500, detail=f"Image generation error: {image_response.status_code}")
@@ -386,11 +382,12 @@ async def run_ad_campaign(req: Request):
                 })
                 duration_ms = (time.time() - start_time) * 1000
                 
-                log_external_api_call(
-                    logger, "poster-service", "/post", "POST",
-                    response_status=post_response.status_code,
-                    duration_ms=round(duration_ms, 2)
-                )
+                logger.info("Poster service request completed", extra={
+                    "service": "poster-service",
+                    "endpoint": "/post",
+                    "status_code": post_response.status_code,
+                    "duration_ms": round(duration_ms, 2)
+                })
 
             # Prepare final response
             final_response = {
@@ -448,11 +445,12 @@ async def download_image(filename: str, request: Request):
             image_response = requests.get(f"http://image-generator:5001/download/{filename}")
             duration_ms = (time.time() - start_time) * 1000
             
-            log_external_api_call(
-                logger, "image-generator", f"/download/{filename}", "GET",
-                response_status=image_response.status_code,
-                duration_ms=round(duration_ms, 2)
-            )
+            logger.debug("Image download request completed", extra={
+                "service": "image-generator",
+                "endpoint": f"/download/{filename}",
+                "status_code": image_response.status_code,
+                "duration_ms": round(duration_ms, 2)
+            })
             
             if image_response.status_code == 404:
                 logger.warning("Image not found", extra={
