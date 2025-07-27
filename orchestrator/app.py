@@ -90,15 +90,20 @@ OUTPUT ONLY THE CORRECTED JSON NOW:"""
 
 def parse_llm_json_response(response: str) -> dict:
     """Parse JSON response from LLM with minimal processing"""
+    logger.debug("parse_llm_json_response called", extra={"response_length": len(response)})
     try:
         # First, try to parse the outer response structure
+        logger.debug("Attempting to parse outer response structure")
         response_obj = json.loads(response)
+        logger.debug("Successfully parsed outer response", extra={"response_type": str(type(response_obj))})
         
         # Extract the actual content
         if isinstance(response_obj, dict) and "response" in response_obj:
             json_content = response_obj["response"]
+            logger.debug("Extracted content from 'response' key")
         else:
             json_content = response
+            logger.debug("Using response directly as JSON content")
             
         logger.debug("Extracted JSON content from LLM response", extra={
             "content_length": len(json_content),
@@ -107,13 +112,18 @@ def parse_llm_json_response(response: str) -> dict:
         
         # Try to parse the actual JSON content
         try:
+            logger.debug("Attempting to parse actual JSON content")
             parsed_data = json.loads(json_content)
+            logger.debug("Successfully parsed JSON content", extra={
+                "parsed_keys": list(parsed_data.keys()) if isinstance(parsed_data, dict) else "not_a_dict"
+            })
             
             # Validate required fields
             required_fields = ["product", "audience", "tone", "description", "features", "scene"]
             missing_fields = [field for field in required_fields if field not in parsed_data]
             
             if missing_fields:
+                logger.warning("Missing required fields", extra={"missing_fields": missing_fields})
                 raise ValueError(f"Missing required fields in JSON response: {missing_fields}")
             
             logger.info("JSON response parsed and validated successfully", extra={
@@ -125,7 +135,7 @@ def parse_llm_json_response(response: str) -> dict:
             return parsed_data
             
         except json.JSONDecodeError as e:
-            logger.error("Failed to parse JSON content", extra={
+            logger.error("JSON decode error on content", extra={
                 "parse_error": str(e),
                 "json_content": json_content,
                 "error_position": getattr(e, 'pos', None)
@@ -134,13 +144,13 @@ def parse_llm_json_response(response: str) -> dict:
             
     except json.JSONDecodeError as e:
         # Response itself is not valid JSON
-        logger.error("Failed to parse LLM response structure", extra={
+        logger.error("JSON decode error on response structure", extra={
             "parse_error": str(e),
             "response_preview": response[:500] + "..." if len(response) > 500 else response
         })
         raise ValueError(f"LLM response is not valid JSON: {str(e)}")
     except Exception as e:
-        logger.error("Unexpected error parsing LLM response", extra={
+        logger.error("Unexpected error in parse function", extra={
             "error": str(e),
             "error_type": type(e).__name__,
             "response_preview": response[:500] + "..." if len(response) > 500 else response
@@ -231,12 +241,20 @@ async def run_ad_campaign(req: Request):
                     # Use original context for first attempt, error correction for retries
                     prompt_to_use = context if attempt == 0 else create_json_fix_prompt(context, last_error, last_response)
                     
+                    logger.debug("Making LLM request", extra={"attempt": attempt + 1})
+                    
                     llm_response = requests.post("http://llm-service:11434/api/generate", json={
                         "model": "llama3",
                         "prompt": prompt_to_use,
                         "stream": False
                     })
                     duration_ms = (time.time() - start_time) * 1000
+                    
+                    logger.debug("LLM response received", extra={
+                        "status_code": llm_response.status_code,
+                        "response_headers": dict(llm_response.headers),
+                        "duration_ms": round(duration_ms, 2)
+                    })
                     
                     log_external_api_call(
                         logger, "llm-service", "/api/generate", "POST",
@@ -246,6 +264,7 @@ async def run_ad_campaign(req: Request):
                     )
                     
                     if llm_response.status_code != 200:
+                        logger.error("LLM service error", extra={"status_code": llm_response.status_code})
                         raise HTTPException(status_code=500, detail=f"LLM service error: {llm_response.status_code}")
 
                 # Parse LLM response
@@ -255,7 +274,7 @@ async def run_ad_campaign(req: Request):
                         logger.debug("Raw LLM response received", extra={
                             "attempt": attempt + 1,
                             "response_length": len(raw_response),
-                            "response_preview": raw_response[:200] + "..." if len(raw_response) > 200 else raw_response,
+                            "response_preview": raw_response[:300] + "..." if len(raw_response) > 300 else raw_response,
                             "response_ends_with": raw_response[-50:] if len(raw_response) > 50 else raw_response
                         })
                         
@@ -276,7 +295,7 @@ async def run_ad_campaign(req: Request):
                             "error": last_error,
                             "will_retry": attempt < max_retries - 1,
                             "raw_response_length": len(last_response),
-                            "raw_response_preview": last_response[:300] + "..." if len(last_response) > 300 else last_response
+                            "raw_response_preview": last_response[:500] + "..." if len(last_response) > 500 else last_response
                         })
                         
                         if attempt == max_retries - 1:
@@ -296,7 +315,7 @@ async def run_ad_campaign(req: Request):
                             "error": last_error,
                             "error_type": type(e).__name__,
                             "raw_response_length": len(last_response),
-                            "raw_response_preview": last_response[:300] + "..." if len(last_response) > 300 else last_response
+                            "raw_response_preview": last_response[:500] + "..." if len(last_response) > 500 else last_response
                         })
                         
                         if attempt == max_retries - 1:
