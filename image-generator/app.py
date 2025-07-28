@@ -114,6 +114,8 @@ class ImagePrompt(BaseModel):
     brand_text: str
     cta_text: str
     scene: str
+    trending_boost: bool = False  # New field for trending mode
+    trending_topic: str = ""      # New field for trending topic
 
 
 # Utility: add branding/CTA overlays with enhanced readability
@@ -230,38 +232,76 @@ def generate_ad(data: ImagePrompt):
                 "features_count": len(data.features),
                 "scene_length": len(data.scene),
                 "brand_text": data.brand_text[:50] + "..." if len(data.brand_text) > 50 else data.brand_text,
-                "cta_text": data.cta_text[:50] + "..." if len(data.cta_text) > 50 else data.cta_text
+                "cta_text": data.cta_text[:50] + "..." if len(data.cta_text) > 50 else data.cta_text,
+                "trending_boost": data.trending_boost,
+                "trending_topic": data.trending_topic[:50] + "..." if len(data.trending_topic) > 50 else data.trending_topic
             })
             
             log_gpu_usage(logger, "before_generation")
             # 1. Build the prompt
             with TimingContext("prompt_building", logger):
-                # Enhanced prompt for better text readability
-                prompt = (f"{data.scene}, clean composition, balanced lighting, "
+                # Base prompt for better text readability
+                base_prompt = (f"{data.scene}, clean composition, balanced lighting, "
                          f"clear areas for text overlay, high contrast, professional advertising style, "
                          f"uncluttered layout, space for branding elements")
+                
+                # Add trending boost effects if enabled
+                if data.trending_boost:
+                    trending_effects = [
+                        "vibrant colors", "dynamic composition", "eye-catching effects",
+                        "social media worthy", "trending aesthetic", "modern style",
+                        "engaging visual elements", "shareable content style",
+                        "contemporary design", "viral marketing appeal"
+                    ]
+                    import random
+                    selected_effects = random.sample(trending_effects, 3)
+                    trending_enhancement = ", ".join(selected_effects)
+                    prompt = f"{base_prompt}, {trending_enhancement}, extra visual impact"
+                    
+                    logger.info("Applied trending boost", extra={
+                        "trending_effects": selected_effects,
+                        "trending_topic": data.trending_topic
+                    })
+                else:
+                    prompt = base_prompt
+                    
                 prompt = trim_prompt(prompt)
                 logger.info("Prompt prepared", extra={
                     "original_scene_length": len(data.scene),
                     "trimmed_prompt_length": len(prompt),
-                    "prompt_preview": prompt[:100] + "..." if len(prompt) > 100 else prompt
+                    "prompt_preview": prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                    "trending_mode": data.trending_boost
                 })
 
             # 2. Generate base image with retries
             with TimingContext("base_image_generation", logger) as base_timer:
                 base_image = None
+                
+                # Enhanced parameters for trending mode
+                if data.trending_boost:
+                    guidance_scale = 8.0  # Higher guidance for more vibrant images
+                    num_steps = 45        # More steps for better quality
+                    logger.info("Using trending boost parameters", extra={
+                        "guidance_scale": guidance_scale,
+                        "num_inference_steps": num_steps
+                    })
+                else:
+                    guidance_scale = 7.5  # Standard parameters
+                    num_steps = 40
+                
                 for attempt in range(3):
                     try:
                         logger.info(f"Base image generation attempt {attempt + 1}", extra={
                             "attempt": attempt + 1,
-                            "max_attempts": 3
+                            "max_attempts": 3,
+                            "trending_mode": data.trending_boost
                         })
                         
                         log_image_generation_metrics(
-                            logger, 1024, 1024, 40, 7.5, "playground-v2-1024px-aesthetic"
+                            logger, 1024, 1024, num_steps, guidance_scale, "playground-v2-1024px-aesthetic"
                         )
                         
-                        base_image = pipe(prompt, guidance_scale=7.5, num_inference_steps=40).images[0]
+                        base_image = pipe(prompt, guidance_scale=guidance_scale, num_inference_steps=num_steps).images[0]
                         logger.info("Base image generated successfully", extra={
                             "attempt": attempt + 1,
                             "duration_ms": round(base_timer.duration_ms, 2)
@@ -286,14 +326,32 @@ def generate_ad(data: ImagePrompt):
             # 3. Refine image
             with TimingContext("image_refinement", logger):
                 logger.info("Starting image refinement")
+                
+                # Enhanced refinement for trending mode
+                if data.trending_boost:
+                    refine_strength = 0.4    # Higher strength for more dramatic effect
+                    refine_guidance = 8.0    # Higher guidance for trending appeal
+                    refine_steps = 25        # More steps for trending mode
+                    logger.info("Using trending refinement parameters", extra={
+                        "strength": refine_strength,
+                        "guidance_scale": refine_guidance,
+                        "num_inference_steps": refine_steps
+                    })
+                else:
+                    refine_strength = 0.3    # Standard parameters
+                    refine_guidance = 7.5
+                    refine_steps = 20
+                
                 final_image = refiner(
                     prompt=prompt,
                     image=base_image,
-                    strength=0.3,
-                    guidance_scale=7.5,
-                    num_inference_steps=20
+                    strength=refine_strength,
+                    guidance_scale=refine_guidance,
+                    num_inference_steps=refine_steps
                 ).images[0]
-                logger.info("Image refinement completed")
+                logger.info("Image refinement completed", extra={
+                    "trending_mode": data.trending_boost
+                })
 
             log_gpu_usage(logger, "after_refinement")
 

@@ -10,6 +10,7 @@ from logging_config import (
     log_request_details, log_response_details
 )
 from json_repair_engine import parse_llm_json_with_repair
+from trends_integration import get_trending_spiced_story, get_trends_debug_info
 
 # Setup structured logging
 logger = setup_logging("orchestrator", "DEBUG")
@@ -82,6 +83,309 @@ def parse_llm_json_response(response: str) -> dict:
         })
         # This should never happen with the repair engine, but just in case
         raise ValueError(f"Unexpected error parsing LLM response: {str(e)}")
+
+@app.post("/run/trending")
+async def run_trending_ad_campaign(req: Request):
+    """Generate a spiced-up advertisement based on current Google Trends"""
+    timer = None
+    try:
+        with TimingContext("trending_ad_campaign_generation", logger) as timer:
+            # Parse request body
+            with TimingContext("request_parsing", logger):
+                body = await req.json()
+                product = body.get("product", "")
+                audience = body.get("audience", "general audience")
+                tone = body.get("tone", "excited")
+                asin = body.get("ASIN", "")
+                brand_text = body.get("brand_text", "")
+                cta_text = body.get("cta_text", "")
+                
+                logger.info("Trending ad generation request received", extra={
+                    "product": product,
+                    "audience": audience,
+                    "tone": tone,
+                    "asin": asin,
+                    "has_brand_text": bool(brand_text),
+                    "has_cta_text": bool(cta_text)
+                })
+
+            # Get trending spiced story
+            with TimingContext("trending_story_generation", logger):
+                story_data = await get_trending_spiced_story()
+                trending_scene = story_data["spiced_story"]
+                original_trend = story_data["original_trend"]
+                
+                logger.info("Trending story generated", extra={
+                    "original_trend": original_trend,
+                    "scene_length": len(trending_scene)
+                })
+
+            # Generate enhanced LLM prompt with trending context
+            trending_context = f"""IMPORTANT: You must output a single, valid UTF‑8 JSON object. Absolutely nothing else.
+
+                Context:
+                You are generating a TRENDING and EXCITING product ad that incorporates current popular topics.
+                
+                Current Trending Topic: {original_trend}
+                Trending Scene: {trending_scene}
+                
+                Product Details:
+                - Product: {product if product else "trendy lifestyle product"}
+                - Target Audience: {audience}
+                - Tone: {tone} (make it extra engaging and trending)
+                - Reference Link: {"https://www.amazon.com/dp/" + asin if asin else "modern product showcase"}
+
+                SPECIAL INSTRUCTIONS:
+                1. Incorporate the trending topic naturally into the product description
+                2. Make the scene description EXTRA SPICY and engaging using the trending scene as inspiration
+                3. Create excitement and FOMO (fear of missing out) in the description
+                4. Use trending language and current popular phrases appropriately
+
+                The goal is to:
+                1. Write an ad description that connects the product to current trends
+                2. Create a SUPER engaging scene that combines the product with trending elements
+                3. Make it feel current, relevant, and exciting
+
+                STRICT RULES (Failure on any rule makes the output invalid):
+                1. Output **only** a raw JSON object — no markdown, no comments, no backticks, no prose.
+                2. All keys must be **double-quoted** ASCII.
+                3. All string values must be **double-quoted** UTF‑8, with no control characters.
+                4. **No** characters outside the UTF‑8 range.
+                5. **No** trailing commas, missing commas, or malformed brackets/braces.
+                6. The output must be valid for both `json.loads()` and `json.load()` in Python — no exceptions, no escapes.
+                7. You MUST return at least these keys:
+                   - `"product"`: string
+                   - `"audience"`: string or list of strings
+                   - `"tone"`: string
+                   - `"description"`: string (incorporate trending elements)
+                   - `"features"`: list of strings (make them sound trendy)
+                   - `"scene"`: a SUPER detailed, spiced-up scene combining product with trending elements
+                   - `"trending_topic"`: the original trending topic used
+
+                Output Example (for format only — do not copy):
+                {{
+                  "product": "Trending Product Name",
+                  "audience": ["trend followers", "social media users"],
+                  "tone": "super excited",
+                  "description": "This amazing product is perfect for the current trend of...",
+                  "features": ["Trending Feature 1", "Viral-worthy Feature 2", "Instagram-ready Feature 3"],
+                  "scene": "An incredibly vibrant scene featuring the product in a trending context with amazing lighting and exciting elements",
+                  "trending_topic": "{original_trend}"
+                }}
+
+                DO NOT:
+                - Wrap the JSON in quotes
+                - Add ```json blocks
+                - Escape the entire response
+                - Include leading/trailing newlines or explanation
+               """
+
+            # LLM call to Ollama with trending context
+            with TimingContext("llm_generation", logger, {"model": "llama3", "type": "trending"}) as llm_timer:
+                start_time = time.time()
+                
+                logger.debug("Making trending LLM request")
+                
+                llm_response = requests.post("http://llm-service:11434/api/generate", json={
+                    "model": "llama3",
+                    "prompt": trending_context,
+                    "stream": False
+                })
+                duration_ms = (time.time() - start_time) * 1000
+                
+                logger.debug("Trending LLM response received", extra={
+                    "status_code": llm_response.status_code,
+                    "response_headers": dict(llm_response.headers),
+                    "duration_ms": round(duration_ms, 2)
+                })
+                
+                if llm_response.status_code != 200:
+                    logger.error("LLM service error", extra={"status_code": llm_response.status_code})
+                    raise HTTPException(status_code=500, detail=f"LLM service error: {llm_response.status_code}")
+
+            # Parse LLM response using comprehensive repair engine
+            with TimingContext("llm_response_parsing", logger):
+                raw_response = llm_response.text.strip()
+                logger.debug("Raw trending LLM response received", extra={
+                    "response_length": len(raw_response),
+                    "response_preview": raw_response[:300] + "..." if len(raw_response) > 300 else raw_response,
+                    "response_ends_with": raw_response[-50:] if len(raw_response) > 50 else raw_response
+                })
+                
+                # The repair engine guarantees successful parsing with valid JSON
+                ad_text = parse_llm_json_response(raw_response)
+                logger.info("Trending LLM response parsed successfully", extra={
+                    "product_parsed": ad_text.get('product'),
+                    "features_count": len(ad_text.get('features', [])),
+                    "scene_length": len(ad_text.get('scene', '')),
+                    "trending_topic": ad_text.get('trending_topic')
+                })
+            
+            if ad_text is None:
+                raise HTTPException(status_code=500, detail="Failed to parse LLM response after all retry attempts")
+
+            # Prepare enhanced image generation prompt with trending elements
+            image_prompt = {
+                "product_name": ad_text['product'],
+                "features": ad_text['features'],
+                "brand_text": brand_text,
+                "cta_text": cta_text,
+                "scene": ad_text['scene'],
+                "trending_boost": True,  # Flag for image generator to apply extra effects
+                "trending_topic": ad_text.get('trending_topic', original_trend)
+            }
+            
+            logger.info("Enhanced trending image generation prompt prepared", extra={
+                "prompt_size": len(json.dumps(image_prompt)),
+                "trending_topic": image_prompt.get("trending_topic")
+            })
+
+            # Image Generator call with trending boost
+            with TimingContext("image_generation", logger, {"type": "trending"}) as img_timer:
+                start_time = time.time()
+                image_response = requests.post("http://image-generator:5001/generate", json=image_prompt)
+                duration_ms = (time.time() - start_time) * 1000
+                
+                logger.info("Trending image generation request completed", extra={
+                    "service": "image-generator",
+                    "endpoint": "/generate",
+                    "status_code": image_response.status_code,
+                    "duration_ms": round(duration_ms, 2),
+                    "prompt_size": len(json.dumps(image_prompt)),
+                    "trending_mode": True
+                })
+                
+                if image_response.status_code != 200:
+                    raise HTTPException(status_code=500, detail=f"Image generation error: {image_response.status_code}")
+
+            # Process image response
+            with TimingContext("image_response_processing", logger):
+                response_data = image_response.json()
+                filename = response_data.get("filename", "")
+                
+                if filename == '' or filename == None:
+                    raise ValueError(f'Error generating filename: {filename}')
+                
+                # Get the host from the request to construct the proper external URL
+                host = req.headers.get("host", "localhost:8000")
+                # Construct URL that points to orchestrator's download endpoint
+                image_url = f"http://{host}/download/{filename}"
+                
+                logger.info("Trending image URL constructed", extra={
+                    "image_filename": filename,
+                    "image_url": image_url
+                })
+
+            # Poster service call with trending flag
+            with TimingContext("post_service", logger, {"type": "trending"}):
+                start_time = time.time()
+                post_response = requests.post("http://poster-service:5002/post", json={
+                    "text": ad_text,
+                    "image_url": image_url,
+                    "trending": True,
+                    "trending_topic": ad_text.get('trending_topic', original_trend)
+                })
+                duration_ms = (time.time() - start_time) * 1000
+                
+                logger.info("Trending poster service request completed", extra={
+                    "service": "poster-service",
+                    "endpoint": "/post",
+                    "status_code": post_response.status_code,
+                    "duration_ms": round(duration_ms, 2),
+                    "trending_mode": True
+                })
+
+            # Prepare final response with trending metadata
+            final_response = {
+                "ad_text": ad_text,
+                "image_url": image_url,
+                "post_status": post_response.json() if post_response.status_code == 200 else {"status": "error", "message": "Post service unavailable"},
+                "trending_data": {
+                    "original_trend": original_trend,
+                    "spiced_story": trending_scene,
+                    "trending_topic_used": ad_text.get('trending_topic', original_trend)
+                }
+            }
+            
+            logger.info("Trending ad campaign generation completed successfully", extra={
+                "total_duration_ms": round(timer.duration_ms, 2),
+                "image_filename": filename,
+                "post_status": final_response["post_status"].get("status", "unknown"),
+                "trending_topic": original_trend
+            })
+            
+            return final_response
+            
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except ValueError as e:
+        logger.error("Validation error in trending ad generation", extra={
+            "error": str(e),
+            "duration_ms": round(timer.duration_ms, 2) if timer else None
+        })
+        raise HTTPException(status_code=400, detail=str(e))
+    except requests.RequestException as e:
+        logger.error("External service error in trending generation", extra={
+            "error": str(e),
+            "duration_ms": round(timer.duration_ms, 2) if timer else None
+        })
+        raise HTTPException(status_code=503, detail=f"External service error: {str(e)}")
+    except Exception as e:
+        import traceback
+        logger.error("Unexpected error in trending ad generation", extra={
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "duration_ms": round(timer.duration_ms, 2) if timer else None,
+            "traceback": traceback.format_exc() if logger.isEnabledFor(logging.DEBUG) else None
+        })
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/trends")
+async def get_current_trends():
+    """Get current Google Trends without generating ads"""
+    try:
+        with TimingContext("trends_fetch", logger):
+            story_data = await get_trending_spiced_story()
+            
+            logger.info("Trends fetched successfully", extra={
+                "trending_topic": story_data.get("original_trend"),
+                "story_length": len(story_data.get("spiced_story", ""))
+            })
+            
+            return {
+                "status": "success",
+                "trending_data": story_data,
+                "timestamp": time.time()
+            }
+            
+    except Exception as e:
+        logger.error("Error fetching trends", extra={
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trends: {str(e)}")
+
+@app.get("/trends/debug")
+async def get_trends_debug():
+    """Get debug information about trends fetching system"""
+    try:
+        debug_info = await get_trends_debug_info()
+        
+        logger.info("Trends debug info requested")
+        
+        return {
+            "status": "success",
+            "debug_info": debug_info,
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error("Error getting trends debug info", extra={
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+        raise HTTPException(status_code=500, detail=f"Failed to get debug info: {str(e)}")
 
 @app.post("/run")
 async def run_ad_campaign(req: Request):

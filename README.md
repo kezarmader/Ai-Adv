@@ -25,6 +25,14 @@ The application consists of 4 microservices:
 - **Image Generator** (Port 5001): Stable Diffusion XL service for creating product images with temporary storage
 - **Poster Service** (Port 5002): Mock service for posting/publishing generated ads
 
+### 🔥 New: Google Trends Integration
+- **Trending Ads**: Generate advertisements based on current Google Trends (`/run/trending`)
+- **Real-time Trends**: Fetch current trending topics (`/trends`)
+- **Enhanced Visuals**: Trending mode applies special effects for viral appeal
+- **Smart Filtering**: Automatically avoids sensitive topics, focuses on positive trends
+
+See **[TRENDING_FEATURE.md](TRENDING_FEATURE.md)** for detailed documentation.
+
 ## ⚠️ Privacy & Data Disclaimer
 
 **IMPORTANT**: This application processes user inputs to generate advertisements. Please be aware:
