@@ -290,7 +290,7 @@ async def run_trending_ad_campaign(req: Request):
                 "product_name": ad_text['product'],
                 "features": ad_text['features'],
                 "brand_text": brand_text,
-                "cta_text": f"🔥 {original_trend} 🔥 {cta_text}",  # Add trending hook to CTA
+                "cta_text": cta_text,  # Keep user's CTA text unchanged
                 "scene": ad_text['scene'],
                 "trending_boost": True,  # Flag for image generator to apply extra effects
                 "trending_topic": ad_text.get('trending_topic', original_trend),
@@ -302,7 +302,7 @@ async def run_trending_ad_campaign(req: Request):
                 "prompt_size": len(json.dumps(image_prompt)),
                 "trending_topic": image_prompt.get("trending_topic"),
                 "trending_keywords": effective_keywords,
-                "hook_cta": image_prompt["cta_text"],
+                "original_cta": cta_text,  # Log original CTA unchanged
                 "hook_source": "extracted" if hook_keywords else "split_trend"
             })
 
