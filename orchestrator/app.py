@@ -86,7 +86,7 @@ def parse_llm_json_response(response: str) -> dict:
 
 @app.post("/run/trending")
 async def run_trending_ad_campaign(req: Request):
-    """Generate a spiced-up advertisement based on current Google Trends"""
+    """Generate a spiced-up advertisement based on current Google Trends with STRICT CONTENT SAFETY"""
     timer = None
     try:
         with TimingContext("trending_ad_campaign_generation", logger) as timer:
@@ -116,10 +116,47 @@ async def run_trending_ad_campaign(req: Request):
                 original_trend = story_data["original_trend"]
                 hook_keywords = story_data.get("hook_keywords", [])
                 
-                logger.info("Trending story with hooks generated", extra={
+                # EMERGENCY CONTENT SAFETY CHECK
+                harmful_keywords = [
+                    "trump", "biden", "rape", "kill", "murder", "death", "died", "dead", "child", "kid", 
+                    "minor", "teen", "sexual", "violence", "shooting", "bomb", "attack", "terrorism",
+                    "tragedy", "disaster", "crash", "accident", "politics", "election", "war", "crime"
+                ]
+                
+                # Check original trend for harmful content
+                trend_lower = original_trend.lower()
+                if any(harmful in trend_lower for harmful in harmful_keywords):
+                    logger.error(f"EMERGENCY SAFETY OVERRIDE: Harmful trend detected: {original_trend}")
+                    # Replace with safe content immediately
+                    original_trend = "Summer outdoor activities and healthy lifestyle"
+                    trending_scene = "A vibrant summer scene featuring outdoor activities with sparkling effects and rainbow colors"
+                    hook_keywords = ["summer", "outdoor", "healthy"]
+                
+                # Check trending scene for harmful content
+                scene_lower = trending_scene.lower()
+                if any(harmful in scene_lower for harmful in harmful_keywords):
+                    logger.error(f"EMERGENCY SAFETY OVERRIDE: Harmful scene detected: {trending_scene}")
+                    trending_scene = "A vibrant summer scene featuring outdoor activities with sparkling effects and rainbow colors"
+                
+                # Check hook keywords for harmful content
+                safe_keywords = []
+                for keyword in hook_keywords:
+                    if not any(harmful in keyword.lower() for harmful in harmful_keywords):
+                        safe_keywords.append(keyword)
+                    else:
+                        logger.error(f"EMERGENCY SAFETY OVERRIDE: Harmful keyword removed: {keyword}")
+                
+                # If no safe keywords, use defaults
+                if not safe_keywords:
+                    safe_keywords = ["trending", "popular", "viral"]
+                
+                hook_keywords = safe_keywords
+                
+                logger.info("Trending story with hooks generated (SAFETY CHECKED)", extra={
                     "original_trend": original_trend,
                     "scene_length": len(trending_scene),
-                    "hook_keywords": hook_keywords
+                    "hook_keywords": hook_keywords,
+                    "safety_checked": True
                 })
 
             # Generate enhanced LLM prompt with trending context

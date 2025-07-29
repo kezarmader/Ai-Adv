@@ -37,11 +37,32 @@ class SecureTrendsProcessor:
             "An uplifting {topic} scene in a {modifier} fairy tale environment"
         ]
         
-        # Topics to avoid (political, sensitive, etc.)
+        # Comprehensive content safety filter - topics to avoid
         self.avoid_keywords = [
-            "war", "politics", "election", "death", "tragedy", "disaster", 
-            "crime", "violence", "protest", "scandal", "controversy", "shooting",
-            "terrorism", "bomb", "attack", "murder", "suicide", "crash", "accident"
+            # Violence & Crime
+            "war", "violence", "shooting", "murder", "kill", "death", "died", "dead", "suicide",
+            "bomb", "explosion", "attack", "terrorism", "terrorist", "assault", "abuse", "rape",
+            "kidnap", "torture", "weapon", "gun", "knife", "blood", "stabbing", "beaten",
+            
+            # Politics & Controversy  
+            "politics", "election", "trump", "biden", "republican", "democrat", "vote", "campaign",
+            "protest", "scandal", "controversy", "impeach", "coup", "fraud", "corruption",
+            
+            # Disasters & Tragedies
+            "tragedy", "disaster", "crash", "accident", "fire", "flood", "hurricane", "earthquake",
+            "pandemic", "covid", "virus", "disease", "illness", "hospital", "emergency",
+            
+            # Sensitive Topics
+            "sexual", "porn", "nude", "naked", "sex", "inappropriate", "offensive", "racist",
+            "discrimination", "hate", "extremist", "radical", "banned", "illegal", "drugs",
+            
+            # News & Current Events (often negative)
+            "breaking", "urgent", "alert", "warning", "crisis", "investigation", "arrest",
+            "charged", "guilty", "sentence", "prison", "jail", "court", "lawsuit", "trial",
+            
+            # Additional Safety Terms
+            "child", "minor", "kid", "baby", "infant", "teen", "student", "school", "young",
+            "victim", "injured", "hurt", "pain", "suffering", "sad", "depression", "anxiety"
         ]
         
         # Rate limiting
@@ -75,20 +96,33 @@ class SecureTrendsProcessor:
                 trends = await source_func()
                 
                 if trends and len(trends) > 0:
-                    # Filter and validate trends
+                    # Filter and validate trends with aggressive safety checks
                     filtered_trends = self._filter_and_validate_trends(trends)
                     
-                    if filtered_trends:
-                        logger.info(f"Successfully fetched {len(filtered_trends)} trends from {source_func.__name__}")
-                        self._update_cache(filtered_trends)
-                        return filtered_trends
+                    # FINAL SAFETY CHECK: If any harmful content still exists, replace with safe content
+                    final_safe_trends = []
+                    for trend in filtered_trends:
+                        if self._is_sensitive_topic(trend):
+                            logger.error(f"CRITICAL: Harmful content detected in final check: {trend}")
+                            # Don't add harmful content, system will use fallbacks
+                            continue
+                        final_safe_trends.append(trend)
+                    
+                    # If we have any safe trends, use them
+                    if final_safe_trends and len(final_safe_trends) >= 2:
+                        logger.info(f"Source {i} provided {len(final_safe_trends)} SAFE trends")
+                        self._update_cache(final_safe_trends)
+                        return final_safe_trends
+                    else:
+                        logger.warning(f"Source {i} had insufficient safe content, trying next source")
+                        continue
                         
             except Exception as e:
                 logger.warning(f"Source {source_func.__name__} failed: {str(e)}")
                 continue
         
         # All sources failed, use fallback
-        logger.warning("All trend sources failed, using fallback topics")
+        logger.warning("All trend sources failed, using SAFE fallback topics")
         fallback_trends = self._get_fallback_trends()
         self._update_cache(fallback_trends)
         return fallback_trends
@@ -308,7 +342,7 @@ class SecureTrendsProcessor:
     
     def _filter_and_validate_trends(self, trends: List[str]) -> List[str]:
         """
-        Filter out sensitive topics and validate trend quality
+        Filter out sensitive topics and validate trend quality with aggressive safety filtering
         """
         filtered_trends = []
         
@@ -318,7 +352,7 @@ class SecureTrendsProcessor:
                 
             trend_clean = trend.strip()
             
-            # Check for sensitive content
+            # Aggressive sensitivity check
             if self._is_sensitive_topic(trend_clean):
                 logger.debug(f"Filtered out sensitive topic: {trend_clean}")
                 continue
@@ -332,6 +366,11 @@ class SecureTrendsProcessor:
             if re.search(r'[<>{}[\]\\|`~]', trend_clean):
                 logger.debug(f"Filtered out topic with special characters: {trend_clean}")
                 continue
+            
+            # Additional safety check: reject anything that looks like news
+            if self._looks_like_news(trend_clean):
+                logger.debug(f"Filtered out news-like topic: {trend_clean}")
+                continue
                 
             filtered_trends.append(trend_clean)
             
@@ -339,7 +378,43 @@ class SecureTrendsProcessor:
             if len(filtered_trends) >= 15:
                 break
         
+        # If we filtered out too many trends, add safe fallback topics
+        if len(filtered_trends) < 3:
+            logger.warning(f"Only {len(filtered_trends)} safe trends found, adding fallback topics")
+            safe_fallbacks = self._get_safe_fallback_trends()
+            filtered_trends.extend(safe_fallbacks[:5])
+        
         return filtered_trends[:10]  # Return top 10 filtered trends
+    
+    def _looks_like_news(self, topic: str) -> bool:
+        """Check if topic looks like a news headline (often negative)"""
+        news_patterns = [
+            r'^\w+ (says|reports|confirms|denies|announces)',
+            r'- [A-Z][a-z]+, [A-Z][A-Z]',  # Location pattern
+            r'(investigation|incident|reports|breaking|urgent)',
+            r'(arrested|charged|guilty|sentenced)',
+            r'\d+ (killed|injured|dead|hurt)'
+        ]
+        
+        for pattern in news_patterns:
+            if re.search(pattern, topic, re.IGNORECASE):
+                return True
+        return False
+    
+    def _get_safe_fallback_trends(self) -> List[str]:
+        """Get guaranteed safe trending topics for advertising"""
+        return [
+            "Summer outdoor activities",
+            "Healthy cooking recipes", 
+            "Home garden tips",
+            "Pet care advice",
+            "Travel destinations",
+            "Art and creativity",
+            "Music and entertainment",
+            "Sports and fitness",
+            "Technology gadgets",
+            "Fashion trends"
+        ]
     
     def _is_cache_valid(self) -> bool:
         """Check if cached trends are still valid"""
@@ -365,54 +440,113 @@ class SecureTrendsProcessor:
             time.sleep(sleep_time)
     
     def _is_sensitive_topic(self, topic: str) -> bool:
-        """Check if topic contains sensitive keywords"""
+        """Check if topic contains sensitive keywords with comprehensive filtering"""
         topic_lower = topic.lower()
-        return any(keyword in topic_lower for keyword in self.avoid_keywords)
+        
+        # Check against avoid keywords
+        if any(keyword in topic_lower for keyword in self.avoid_keywords):
+            logger.warning(f"Filtered out sensitive topic: {topic}")
+            return True
+        
+        # Additional patterns to catch
+        sensitive_patterns = [
+            r'\b(kill|murder|death|died|dead)\b',
+            r'\b(rape|sexual|abuse)\b', 
+            r'\b(trump|biden|president)\b',
+            r'\b(shooting|bomb|attack)\b',
+            r'\b(child|kid|minor|teen)\b',
+            r'\b(crash|accident|tragedy)\b'
+        ]
+        
+        for pattern in sensitive_patterns:
+            if re.search(pattern, topic_lower):
+                logger.warning(f"Filtered out topic matching pattern '{pattern}': {topic}")
+                return True
+        
+        # Check for news-like formatting (often negative)
+        if re.search(r'^[A-Z][a-z]+ (says|reports|confirms|denies)', topic):
+            logger.warning(f"Filtered out news-style topic: {topic}")
+            return True
+            
+        # Check for location + negative event pattern
+        if re.search(r'- [A-Z][a-z]+, [A-Z][A-Z]', topic) and any(word in topic_lower for word in ['reports', 'investigation', 'incident']):
+            logger.warning(f"Filtered out location-based news topic: {topic}")
+            return True
+            
+        return False
     
     def _get_fallback_trends(self) -> List[str]:
-        """Fallback trending topics when all sources fail"""
-        fallback_topics = [
+        """Fallback trending topics when all sources fail - guaranteed safe content"""
+        safe_topics = [
             "Summer vacation destinations",
-            "Ice cream flavors",
-            "Pet adoption events", 
-            "Music festivals",
-            "Art exhibitions",
-            "Food trucks",
-            "Beach activities",
-            "Garden parties",
-            "Street art",
-            "Local markets",
+            "Ice cream flavors and recipes",
+            "Pet adoption and care", 
+            "Music festivals and concerts",
+            "Art exhibitions and galleries",
+            "Food trucks and street food",
+            "Beach activities and water sports",
+            "Garden parties and outdoor dining",
+            "Street art and murals",
+            "Local farmers markets",
             "Home workout routines",
-            "Healthy recipes",
-            "DIY crafts",
-            "Photography tips",
-            "Book recommendations"
+            "Healthy cooking and nutrition",
+            "DIY crafts and hobbies",
+            "Photography tips and techniques",
+            "Book recommendations and reviews",
+            "Coffee shop culture",
+            "Hiking trails and nature",
+            "Board games and puzzles",
+            "Sustainable living tips",
+            "Mindfulness and meditation"
         ]
-        return random.sample(fallback_topics, min(10, len(fallback_topics)))
+        selected = random.sample(safe_topics, min(10, len(safe_topics)))
+        logger.info(f"Using {len(selected)} safe fallback trends")
+        return selected
     
     def extract_hook_keywords(self, trend: str) -> List[str]:
-        """Extract key hook words from trending topic for visual emphasis"""
+        """Extract key hook words from trending topic for visual emphasis with safety check"""
         import re
+        
+        # EMERGENCY SAFETY CHECK - if trend contains any harmful content, return safe keywords
+        if self._is_sensitive_topic(trend):
+            logger.warning(f"Emergency safety override: replacing harmful trend with safe keywords")
+            return ['trending', 'popular', 'viral']
         
         # Clean the trend
         clean_trend = self._clean_trend_title(trend)
         
+        # Another safety check on cleaned trend
+        if self._is_sensitive_topic(clean_trend):
+            logger.warning(f"Emergency safety override on cleaned trend: replacing with safe keywords")
+            return ['trending', 'popular', 'viral']
+        
         # Split into words and filter
         words = re.findall(r'\b\w+\b', clean_trend.lower())
         
-        # Filter out common words
+        # Filter out common words AND potentially harmful words
         stop_words = {
             'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
             'from', 'up', 'about', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
             'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
-            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those'
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those',
+            # Add safety words to stop list
+            'trump', 'biden', 'president', 'rape', 'kill', 'murder', 'death', 'died', 'dead', 'child', 'kid'
         }
         
-        # Keep meaningful words (length > 2, not in stop words)
-        keywords = [word for word in words if len(word) > 2 and word not in stop_words]
+        # Keep meaningful words (length > 2, not in stop words, not harmful)
+        keywords = []
+        for word in words:
+            if len(word) > 2 and word not in stop_words:
+                # Double-check each word for safety
+                if not any(harmful in word for harmful in self.avoid_keywords):
+                    keywords.append(word)
+        
+        # If no safe keywords found, return generic safe ones
+        if not keywords:
+            return ['trending', 'viral', 'popular']
         
         # Return top 3 most impactful keywords
-        return keywords[:3] if keywords else ['trending', 'viral', 'popular']
+        return keywords[:3]
     
     def create_spiced_story(self, trends: List[str]) -> Dict[str, str]:
         """Create a spiced-up story from trending topics"""
