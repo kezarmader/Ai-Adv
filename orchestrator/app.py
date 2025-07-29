@@ -116,47 +116,60 @@ async def run_trending_ad_campaign(req: Request):
                 original_trend = story_data["original_trend"]
                 hook_keywords = story_data.get("hook_keywords", [])
                 
-                # EMERGENCY CONTENT SAFETY CHECK
+                # SAFETY VERIFICATION with 3-attempt retry mechanism
                 harmful_keywords = [
                     "trump", "biden", "rape", "kill", "murder", "death", "died", "dead", "child", "kid", 
                     "minor", "teen", "sexual", "violence", "shooting", "bomb", "attack", "terrorism",
                     "tragedy", "disaster", "crash", "accident", "politics", "election", "war", "crime"
                 ]
                 
-                # Check original trend for harmful content
-                trend_lower = original_trend.lower()
-                if any(harmful in trend_lower for harmful in harmful_keywords):
-                    logger.error(f"EMERGENCY SAFETY OVERRIDE: Harmful trend detected: {original_trend}")
-                    # Replace with safe content immediately
-                    original_trend = "Summer outdoor activities and healthy lifestyle"
-                    trending_scene = "A vibrant summer scene featuring outdoor activities with sparkling effects and rainbow colors"
-                    hook_keywords = ["summer", "outdoor", "healthy"]
+                attempt_count = 0
+                max_safety_attempts = 3
                 
-                # Check trending scene for harmful content
-                scene_lower = trending_scene.lower()
-                if any(harmful in scene_lower for harmful in harmful_keywords):
-                    logger.error(f"EMERGENCY SAFETY OVERRIDE: Harmful scene detected: {trending_scene}")
-                    trending_scene = "A vibrant summer scene featuring outdoor activities with sparkling effects and rainbow colors"
-                
-                # Check hook keywords for harmful content
-                safe_keywords = []
-                for keyword in hook_keywords:
-                    if not any(harmful in keyword.lower() for harmful in harmful_keywords):
-                        safe_keywords.append(keyword)
+                while attempt_count < max_safety_attempts:
+                    attempt_count += 1
+                    
+                    # Check current trend for harmful content
+                    trend_lower = original_trend.lower()
+                    if any(harmful in trend_lower for harmful in harmful_keywords):
+                        logger.warning(f"Safety attempt {attempt_count}: Harmful trend detected, trying to get next safe trend: {original_trend}")
+                        
+                        # Try to get a new safe story from trends integration
+                        try:
+                            story_data = await get_trending_spiced_story()
+                            trending_scene = story_data["spiced_story"]
+                            original_trend = story_data["original_trend"]
+                            hook_keywords = story_data.get("hook_keywords", [])
+                            
+                            # Continue the loop to check this new trend
+                            continue
+                            
+                        except Exception as e:
+                            logger.warning(f"Safety attempt {attempt_count}: Failed to get new trending story: {str(e)}")
+                            
+                            # If this is the last attempt, use fallback
+                            if attempt_count >= max_safety_attempts:
+                                break
+                            continue
                     else:
-                        logger.error(f"EMERGENCY SAFETY OVERRIDE: Harmful keyword removed: {keyword}")
+                        # Trend is safe, break out of retry loop
+                        logger.info(f"Safe trend verified on attempt {attempt_count}: {original_trend}")
+                        break
                 
-                # If no safe keywords, use defaults
-                if not safe_keywords:
-                    safe_keywords = ["trending", "popular", "viral"]
+                # If all attempts failed, log error and use fallback
+                if attempt_count >= max_safety_attempts and any(harmful in original_trend.lower() for harmful in harmful_keywords):
+                    logger.error(f"CRITICAL: Failed to find safe trend after {max_safety_attempts} attempts, using emergency fallback")
+                    from trends_integration import trends_processor
+                    story_data = trends_processor._get_fallback_story()
+                    trending_scene = story_data["spiced_story"]
+                    original_trend = story_data["original_trend"]
+                    hook_keywords = ["trending", "popular", "viral"]
                 
-                hook_keywords = safe_keywords
-                
-                logger.info("Trending story with hooks generated (SAFETY CHECKED)", extra={
+                logger.info("Trending story with hooks verified safe", extra={
                     "original_trend": original_trend,
                     "scene_length": len(trending_scene),
                     "hook_keywords": hook_keywords,
-                    "safety_checked": True
+                    "safety_verified": True
                 })
 
             # Generate enhanced LLM prompt with trending context

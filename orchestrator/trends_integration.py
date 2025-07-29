@@ -99,22 +99,33 @@ class SecureTrendsProcessor:
                     # Filter and validate trends with aggressive safety checks
                     filtered_trends = self._filter_and_validate_trends(trends)
                     
-                    # FINAL SAFETY CHECK: If any harmful content still exists, replace with safe content
+                    # FINAL SAFETY CHECK with 3-attempt mechanism
                     final_safe_trends = []
+                    safety_attempts = 0
+                    max_safety_attempts = 3
+                    
                     for trend in filtered_trends:
                         if self._is_sensitive_topic(trend):
-                            logger.error(f"CRITICAL: Harmful content detected in final check: {trend}")
-                            # Don't add harmful content, system will use fallbacks
+                            safety_attempts += 1
+                            logger.warning(f"Safety attempt {safety_attempts}: Skipping harmful content, trying next trend: {trend}")
+                            
+                            # If we've tried 3 harmful trends, stop and use what we have
+                            if safety_attempts >= max_safety_attempts:
+                                logger.warning(f"Reached {max_safety_attempts} harmful trends, stopping safety checks for this source")
+                                break
                             continue
                         final_safe_trends.append(trend)
                     
                     # If we have any safe trends, use them
-                    if final_safe_trends and len(final_safe_trends) >= 2:
-                        logger.info(f"Source {i} provided {len(final_safe_trends)} SAFE trends")
+                    if final_safe_trends and len(final_safe_trends) >= 1:
+                        logger.info(f"Source {i} provided {len(final_safe_trends)} SAFE trends after {safety_attempts} safety skips")
                         self._update_cache(final_safe_trends)
                         return final_safe_trends
                     else:
-                        logger.warning(f"Source {i} had insufficient safe content, trying next source")
+                        if safety_attempts >= max_safety_attempts:
+                            logger.error(f"Source {i} failed: too many harmful trends ({safety_attempts} attempts), trying next source")
+                        else:
+                            logger.warning(f"Source {i} had insufficient safe content, trying next source")
                         continue
                         
             except Exception as e:
@@ -504,12 +515,12 @@ class SecureTrendsProcessor:
         return selected
     
     def extract_hook_keywords(self, trend: str) -> List[str]:
-        """Extract key hook words from trending topic for visual emphasis with safety check"""
+        """Extract key hook words from trending topic for visual emphasis - returns safe keywords only"""
         import re
         
-        # EMERGENCY SAFETY CHECK - if trend contains any harmful content, return safe keywords
+        # If trend contains any harmful content, return safe default keywords
         if self._is_sensitive_topic(trend):
-            logger.warning(f"Emergency safety override: replacing harmful trend with safe keywords")
+            logger.warning(f"Trend contains sensitive content, using safe default keywords instead of extracting: {trend}")
             return ['trending', 'popular', 'viral']
         
         # Clean the trend
@@ -517,7 +528,7 @@ class SecureTrendsProcessor:
         
         # Another safety check on cleaned trend
         if self._is_sensitive_topic(clean_trend):
-            logger.warning(f"Emergency safety override on cleaned trend: replacing with safe keywords")
+            logger.warning(f"Cleaned trend contains sensitive content, using safe default keywords: {clean_trend}")
             return ['trending', 'popular', 'viral']
         
         # Split into words and filter
@@ -540,64 +551,101 @@ class SecureTrendsProcessor:
                 # Double-check each word for safety
                 if not any(harmful in word for harmful in self.avoid_keywords):
                     keywords.append(word)
+                else:
+                    logger.debug(f"Skipping potentially harmful keyword: {word}")
         
         # If no safe keywords found, return generic safe ones
         if not keywords:
+            logger.info("No safe keywords extracted, using default safe keywords")
             return ['trending', 'viral', 'popular']
         
         # Return top 3 most impactful keywords
         return keywords[:3]
     
     def create_spiced_story(self, trends: List[str]) -> Dict[str, str]:
-        """Create a spiced-up story from trending topics"""
+        """Create a spiced-up story from trending topics - try up to 3 safe trends before falling back"""
         try:
-            # Select a random trend
-            selected_trend = random.choice(trends)
+            attempts = 0
+            max_attempts = 3
             
-            # Clean up the trend title
-            clean_trend = self._clean_trend_title(selected_trend)
+            # Try each trend until we find a safe one or reach max attempts
+            for attempt_trend in trends:
+                attempts += 1
+                
+                # Check if this trend is safe BEFORE processing
+                if self._is_sensitive_topic(attempt_trend):
+                    logger.info(f"Attempt {attempts}: Skipping sensitive trend, trying next: {attempt_trend}")
+                    
+                    # If we've tried 3 sensitive trends, break and use fallback
+                    if attempts >= max_attempts:
+                        logger.warning(f"Failed to find safe trend after {max_attempts} attempts, using fallback")
+                        break
+                    continue  # Skip to next trend
+                
+                # This trend is safe, use it
+                selected_trend = attempt_trend
+                
+                # Clean up the trend title
+                clean_trend = self._clean_trend_title(selected_trend)
+                
+                # Double-check cleaned trend is still safe
+                if self._is_sensitive_topic(clean_trend):
+                    logger.info(f"Attempt {attempts}: Skipping trend after cleaning, trying next: {clean_trend}")
+                    
+                    # If we've tried 3 trends (including cleaned ones), break and use fallback
+                    if attempts >= max_attempts:
+                        logger.warning(f"Failed to find safe cleaned trend after {max_attempts} attempts, using fallback")
+                        break
+                    continue  # Skip to next trend
+                
+                # We found a safe trend! Create the story
+                # Select random modifiers and template
+                modifier = random.choice(self.happy_modifiers)
+                template = random.choice(self.story_templates)
+                
+                # Create the spiced story
+                spiced_story = template.format(
+                    topic=clean_trend,
+                    modifier=modifier
+                )
+                
+                # Add extra spice elements
+                spice_elements = [
+                    "with golden hour lighting",
+                    "surrounded by floating balloons",
+                    "with gentle sparkles in the air",
+                    "in a dreamy pastel color palette",
+                    "with soft bokeh effects",
+                    "featuring happy people laughing",
+                    "with beautiful flowers blooming",
+                    "under a clear blue sky",
+                    "with warm sunset colors",
+                    "featuring vibrant energy",
+                    "with magical atmosphere",
+                    "in a picture-perfect setting"
+                ]
+                
+                extra_spice = random.choice(spice_elements)
+                final_story = f"{spiced_story} {extra_spice}"
+                
+                logger.info(f"Successfully created spiced story from SAFE trend on attempt {attempts}", extra={
+                    "original_trend": selected_trend,
+                    "clean_trend": clean_trend,
+                    "spiced_story": final_story,
+                    "attempts_made": attempts,
+                    "safety_verified": True
+                })
+                
+                return {
+                    "original_trend": selected_trend,
+                    "clean_trend": clean_trend,
+                    "spiced_story": final_story,
+                    "modifier_used": modifier
+                }
             
-            # Select random modifiers and template
-            modifier = random.choice(self.happy_modifiers)
-            template = random.choice(self.story_templates)
-            
-            # Create the spiced story
-            spiced_story = template.format(
-                topic=clean_trend,
-                modifier=modifier
-            )
-            
-            # Add extra spice elements
-            spice_elements = [
-                "with golden hour lighting",
-                "surrounded by floating balloons",
-                "with gentle sparkles in the air",
-                "in a dreamy pastel color palette",
-                "with soft bokeh effects",
-                "featuring happy people laughing",
-                "with beautiful flowers blooming",
-                "under a clear blue sky",
-                "with warm sunset colors",
-                "featuring vibrant energy",
-                "with magical atmosphere",
-                "in a picture-perfect setting"
-            ]
-            
-            extra_spice = random.choice(spice_elements)
-            final_story = f"{spiced_story} {extra_spice}"
-            
-            logger.info("Created spiced story", extra={
-                "original_trend": selected_trend,
-                "clean_trend": clean_trend,
-                "spiced_story": final_story
-            })
-            
-            return {
-                "original_trend": selected_trend,
-                "clean_trend": clean_trend,
-                "spiced_story": final_story,
-                "modifier_used": modifier
-            }
+            # If we get here, all attempts failed or we reached max attempts
+            logger.error(f"All {max_attempts} trend attempts were sensitive or failed safety checks, using fallback story")
+            return self._get_fallback_story()
             
         except Exception as e:
             logger.error(f"Failed to create spiced story: {str(e)}")
@@ -630,33 +678,63 @@ async def get_trending_spiced_story() -> Dict[str, str]:
     """
     Main function to get a spiced story from current trends
     Uses secure multi-source trend fetching with caching and rate limiting
+    Implements 3-attempt mechanism for safety verification
     """
     try:
         # Respect rate limiting
         trends_processor._respect_rate_limit()
         
-        # Fetch current trends from multiple sources
-        trends = await trends_processor.fetch_trends_multi_source()
+        max_story_attempts = 3
+        story_attempt = 0
         
-        if not trends:
-            logger.warning("No trends fetched from any source, using fallback")
-            return trends_processor._get_fallback_story()
+        while story_attempt < max_story_attempts:
+            story_attempt += 1
+            
+            # Fetch current trends from multiple sources
+            trends = await trends_processor.fetch_trends_multi_source()
+            
+            if not trends:
+                logger.warning(f"Story attempt {story_attempt}: No trends fetched from any source")
+                if story_attempt >= max_story_attempts:
+                    logger.error("Failed to fetch trends after 3 attempts, using fallback")
+                    return trends_processor._get_fallback_story()
+                continue
+            
+            # Create spiced story with hook keywords (will skip sensitive trends automatically)
+            story_data = trends_processor.create_spiced_story(trends)
+            
+            # Verify the resulting story is safe
+            if 'original_trend' in story_data:
+                if not trends_processor._is_sensitive_topic(story_data['original_trend']):
+                    # Story is safe, add hook keywords
+                    story_data['hook_keywords'] = trends_processor.extract_hook_keywords(story_data['original_trend'])
+                    
+                    logger.info(f"Successfully generated safe trending story on attempt {story_attempt}", extra={
+                        "trend_count": len(trends),
+                        "story_length": len(story_data.get("spiced_story", "")),
+                        "hook_keywords": story_data.get('hook_keywords', []),
+                        "cache_used": trends_processor._is_cache_valid(),
+                        "attempts_made": story_attempt,
+                        "safety_verified": True
+                    })
+                    
+                    return story_data
+                else:
+                    logger.warning(f"Story attempt {story_attempt}: Generated story contains sensitive content, retrying")
+                    if story_attempt >= max_story_attempts:
+                        logger.error("All story generation attempts contained sensitive content, using fallback")
+                        break
+                    continue
+            else:
+                logger.warning(f"Story attempt {story_attempt}: Story data missing original_trend, retrying")
+                if story_attempt >= max_story_attempts:
+                    logger.error("All story generation attempts had malformed data, using fallback")
+                    break
+                continue
         
-        # Create spiced story with hook keywords
-        story_data = trends_processor.create_spiced_story(trends)
-        
-        # Add hook keywords for visual emphasis
-        if 'original_trend' in story_data:
-            story_data['hook_keywords'] = trends_processor.extract_hook_keywords(story_data['original_trend'])
-        
-        logger.info("Successfully generated trending spiced story with hooks", extra={
-            "trend_count": len(trends),
-            "story_length": len(story_data.get("spiced_story", "")),
-            "hook_keywords": story_data.get('hook_keywords', []),
-            "cache_used": trends_processor._is_cache_valid()
-        })
-        
-        return story_data
+        # If we get here, all attempts failed
+        logger.error("Failed to generate safe trending story after 3 attempts, using fallback")
+        return trends_processor._get_fallback_story()
         
     except Exception as e:
         logger.error(f"Error in get_trending_spiced_story: {str(e)}")
