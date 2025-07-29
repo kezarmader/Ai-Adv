@@ -249,38 +249,31 @@ def generate_ad(data: ImagePrompt):
                          f"clear areas for text overlay, high contrast, professional advertising style, "
                          f"uncluttered layout, space for branding elements")
                 
-                # Add trending keyword hooks for visual emphasis
+                # Add subtle trending keyword hooks for visual emphasis (IMPROVED)
                 if data.hook_mode and data.trending_keywords:
-                    import random  # Import here for hook functionality
-                    keyword_hooks = ", ".join([f"prominent {keyword} elements" for keyword in data.trending_keywords[:3]])
-                    visual_hooks = [
-                        "attention-grabbing focal points", "viral content style", "social media impact",
-                        "trending visual language", "hook-focused composition", "scroll-stopping design"
-                    ]
-                    hook_enhancement = f", {keyword_hooks}, " + ", ".join(random.sample(visual_hooks, 2))
-                    base_prompt = f"{base_prompt}{hook_enhancement}"
-                    
-                    logger.info("Applied HOOK-FOCUSED enhancement", extra={
-                        "trending_keywords": data.trending_keywords,
-                        "keyword_hooks": keyword_hooks,
-                        "hook_mode": True
-                    })
+                    # Use only the first keyword to avoid overloading
+                    primary_keyword = data.trending_keywords[0] if data.trending_keywords else ""
+                    if primary_keyword:
+                        keyword_enhancement = f", subtle {primary_keyword} themed elements"
+                        base_prompt = f"{base_prompt}{keyword_enhancement}"
+                        
+                        logger.info("Applied subtle HOOK-FOCUSED enhancement", extra={
+                            "primary_keyword": primary_keyword,
+                            "hook_mode": True
+                        })
                 
-                # Add trending boost effects if enabled
+                # Add minimal trending boost effects if enabled (IMPROVED)
                 if data.trending_boost:
+                    # Use only ONE subtle effect to maintain realism
                     trending_effects = [
-                        "vibrant colors", "dynamic composition", "eye-catching effects",
-                        "social media worthy", "trending aesthetic", "modern style",
-                        "engaging visual elements", "shareable content style",
-                        "contemporary design", "viral marketing appeal"
+                        "modern style", "contemporary design", "engaging composition"
                     ]
                     import random
-                    selected_effects = random.sample(trending_effects, 3)
-                    trending_enhancement = ", ".join(selected_effects)
-                    prompt = f"{base_prompt}, {trending_enhancement}, extra visual impact"
+                    selected_effect = random.choice(trending_effects)
+                    prompt = f"{base_prompt}, {selected_effect}"
                     
-                    logger.info("Applied trending boost", extra={
-                        "trending_effects": selected_effects,
+                    logger.info("Applied minimal trending boost", extra={
+                        "trending_effect": selected_effect,
                         "trending_topic": data.trending_topic
                     })
                 else:
@@ -291,7 +284,8 @@ def generate_ad(data: ImagePrompt):
                     "original_scene_length": len(data.scene),
                     "trimmed_prompt_length": len(prompt),
                     "prompt_preview": prompt[:100] + "..." if len(prompt) > 100 else prompt,
-                    "trending_mode": data.trending_boost
+                    "trending_mode": data.trending_boost,
+                    "enhancement_level": "subtle" if data.trending_boost else "standard"
                 })
 
             # 2. Generate base image with retries

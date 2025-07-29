@@ -172,38 +172,33 @@ async def run_trending_ad_campaign(req: Request):
                     "safety_verified": True
                 })
 
-            # Generate enhanced LLM prompt with trending context
+            # Generate enhanced LLM prompt with trending context (CUSTOMER-FOCUSED)
             trending_context = f"""IMPORTANT: You must output a single, valid UTF‑8 JSON object. Absolutely nothing else.
 
                 Context:
-                You are generating a VIRAL-WORTHY product ad that uses TRENDING KEYWORDS as the main hook.
+                You are generating a realistic product ad that RESPECTS the customer's requirements while subtly incorporating current trending elements.
                 
-                🔥 TRENDING HOOK: "{original_trend}"
-                🎬 Trending Scene Inspiration: {trending_scene}
-                
-                Product Details:
+                PRIMARY REQUIREMENTS (MUST BE RESPECTED):
                 - Product: {product if product else "trendy lifestyle product"}
                 - Target Audience: {audience}
-                - Tone: {tone} (make it ULTRA engaging and trend-focused)
+                - Tone: {tone}
                 - Reference Link: {"https://www.amazon.com/dp/" + asin if asin else "modern product showcase"}
 
-                🎯 HOOK STRATEGY - Use "{original_trend}" as your PRIMARY ATTENTION GRABBER:
-                1. Start your description with a reference to this trending topic
-                2. Connect the product directly to why this trend matters to your audience
-                3. Create urgency: "Join the {original_trend} movement with..."
-                4. Use the trend as the main selling angle, not just background
-
-                SPECIAL INSTRUCTIONS FOR VIRAL APPEAL:
-                1. HEADLINE APPROACH: Lead with the trending topic as a hook
-                2. FOMO CREATION: Make people feel they'll miss out if they don't connect to this trend
-                3. SOCIAL PROOF: Imply everyone is talking about this trend
-                4. SCENE INTEGRATION: The visual scene should PROMINENTLY feature trend elements
-                5. TRENDING LANGUAGE: Use current viral phrases and social media language
+                SECONDARY ENHANCEMENT (Subtle Trending Integration):
+                🔥 Current Trend: "{original_trend}"
+                🎬 Trending Scene Inspiration: {trending_scene}
+                
+                INTEGRATION STRATEGY - Enhance customer requirements with trending elements:
+                1. RESPECT the customer's product, audience, and tone as PRIMARY requirements
+                2. Subtly reference the trending topic IF it naturally fits the product/audience
+                3. Use trending elements to enhance the scene, not override the core message
+                4. Maintain the customer's specified tone while adding contemporary appeal
+                5. Only incorporate trending language if it aligns with the target audience
 
                 The goal is to:
-                1. Make the trending topic the STAR of the ad, with the product as the perfect solution
-                2. Create a scene that visually represents both the trend AND the product powerfully
-                3. Generate maximum engagement by tapping into what's already popular
+                1. Generate an ad that perfectly matches the customer's product, audience, and tone
+                2. Subtly enhance it with relevant trending elements where appropriate
+                3. Create a scene that represents the product authentically with modern appeal
 
                 STRICT RULES (Failure on any rule makes the output invalid):
                 1. Output **only** a raw JSON object — no markdown, no comments, no backticks, no prose.
@@ -213,30 +208,30 @@ async def run_trending_ad_campaign(req: Request):
                 5. **No** trailing commas, missing commas, or malformed brackets/braces.
                 6. The output must be valid for both `json.loads()` and `json.load()` in Python — no exceptions, no escapes.
                 7. You MUST return at least these keys:
-                   - `"product"`: string
-                   - `"audience"`: string or list of strings
-                   - `"tone"`: string
-                   - `"description"`: string (incorporate trending elements)
-                   - `"features"`: list of strings (make them sound trendy)
-                   - `"scene"`: a SUPER detailed, spiced-up scene combining product with trending elements
+                   - `"product"`: string (customer's product as primary focus)
+                   - `"audience"`: string or list of strings (customer's specified audience)
+                   - `"tone"`: string (customer's specified tone)
+                   - `"description"`: string (customer-focused with subtle trending enhancement)
+                   - `"features"`: list of strings (product features with contemporary appeal)
+                   - `"scene"`: a detailed scene representing the product with modern/trending elements
                    - `"trending_topic"`: the original trending topic used
 
                 Output Example (for format only — do not copy):
                 {{
-                  "product": "Trending Product Name",
-                  "audience": ["trend followers", "social media users"],
-                  "tone": "super excited",
-                  "description": "This amazing product is perfect for the current trend of...",
-                  "features": ["Trending Feature 1", "Viral-worthy Feature 2", "Instagram-ready Feature 3"],
-                  "scene": "An incredibly vibrant scene featuring the product in a trending context with amazing lighting and exciting elements",
+                  "product": "{product}",
+                  "audience": ["{audience}"],
+                  "tone": "{tone}",
+                  "description": "This {product} is perfect for {audience} with modern appeal and quality features...",
+                  "features": ["Customer Feature 1", "Enhanced Feature 2", "Contemporary Feature 3"],
+                  "scene": "A realistic scene showcasing {product} for {audience} with subtle modern/trending elements",
                   "trending_topic": "{original_trend}"
                 }}
 
                 DO NOT:
-                - Wrap the JSON in quotes
-                - Add ```json blocks
-                - Escape the entire response
-                - Include leading/trailing newlines or explanation
+                - Override customer requirements with trending focus
+                - Make trending the primary message
+                - Change the customer's specified tone dramatically
+                - Ignore the customer's target audience
                """
 
             # LLM call to Ollama with trending context
@@ -273,11 +268,12 @@ async def run_trending_ad_campaign(req: Request):
                 
                 # The repair engine guarantees successful parsing with valid JSON
                 ad_text = parse_llm_json_response(raw_response)
-                logger.info("Trending LLM response parsed successfully", extra={
+                logger.info("Trending LLM response parsed successfully (customer-focused)", extra={
                     "product_parsed": ad_text.get('product'),
                     "features_count": len(ad_text.get('features', [])),
                     "scene_length": len(ad_text.get('scene', '')),
-                    "trending_topic": ad_text.get('trending_topic')
+                    "trending_topic": ad_text.get('trending_topic'),
+                    "customer_requirements_preserved": True
                 })
             
             if ad_text is None:
