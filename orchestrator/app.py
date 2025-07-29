@@ -109,42 +109,51 @@ async def run_trending_ad_campaign(req: Request):
                     "has_cta_text": bool(cta_text)
                 })
 
-            # Get trending spiced story
+            # Get trending spiced story with hook keywords
             with TimingContext("trending_story_generation", logger):
                 story_data = await get_trending_spiced_story()
                 trending_scene = story_data["spiced_story"]
                 original_trend = story_data["original_trend"]
+                hook_keywords = story_data.get("hook_keywords", [])
                 
-                logger.info("Trending story generated", extra={
+                logger.info("Trending story with hooks generated", extra={
                     "original_trend": original_trend,
-                    "scene_length": len(trending_scene)
+                    "scene_length": len(trending_scene),
+                    "hook_keywords": hook_keywords
                 })
 
             # Generate enhanced LLM prompt with trending context
             trending_context = f"""IMPORTANT: You must output a single, valid UTF‑8 JSON object. Absolutely nothing else.
 
                 Context:
-                You are generating a TRENDING and EXCITING product ad that incorporates current popular topics.
+                You are generating a VIRAL-WORTHY product ad that uses TRENDING KEYWORDS as the main hook.
                 
-                Current Trending Topic: {original_trend}
-                Trending Scene: {trending_scene}
+                🔥 TRENDING HOOK: "{original_trend}"
+                🎬 Trending Scene Inspiration: {trending_scene}
                 
                 Product Details:
                 - Product: {product if product else "trendy lifestyle product"}
                 - Target Audience: {audience}
-                - Tone: {tone} (make it extra engaging and trending)
+                - Tone: {tone} (make it ULTRA engaging and trend-focused)
                 - Reference Link: {"https://www.amazon.com/dp/" + asin if asin else "modern product showcase"}
 
-                SPECIAL INSTRUCTIONS:
-                1. Incorporate the trending topic naturally into the product description
-                2. Make the scene description EXTRA SPICY and engaging using the trending scene as inspiration
-                3. Create excitement and FOMO (fear of missing out) in the description
-                4. Use trending language and current popular phrases appropriately
+                🎯 HOOK STRATEGY - Use "{original_trend}" as your PRIMARY ATTENTION GRABBER:
+                1. Start your description with a reference to this trending topic
+                2. Connect the product directly to why this trend matters to your audience
+                3. Create urgency: "Join the {original_trend} movement with..."
+                4. Use the trend as the main selling angle, not just background
+
+                SPECIAL INSTRUCTIONS FOR VIRAL APPEAL:
+                1. HEADLINE APPROACH: Lead with the trending topic as a hook
+                2. FOMO CREATION: Make people feel they'll miss out if they don't connect to this trend
+                3. SOCIAL PROOF: Imply everyone is talking about this trend
+                4. SCENE INTEGRATION: The visual scene should PROMINENTLY feature trend elements
+                5. TRENDING LANGUAGE: Use current viral phrases and social media language
 
                 The goal is to:
-                1. Write an ad description that connects the product to current trends
-                2. Create a SUPER engaging scene that combines the product with trending elements
-                3. Make it feel current, relevant, and exciting
+                1. Make the trending topic the STAR of the ad, with the product as the perfect solution
+                2. Create a scene that visually represents both the trend AND the product powerfully
+                3. Generate maximum engagement by tapping into what's already popular
 
                 STRICT RULES (Failure on any rule makes the output invalid):
                 1. Output **only** a raw JSON object — no markdown, no comments, no backticks, no prose.
@@ -224,20 +233,27 @@ async def run_trending_ad_campaign(req: Request):
             if ad_text is None:
                 raise HTTPException(status_code=500, detail="Failed to parse LLM response after all retry attempts")
 
-            # Prepare enhanced image generation prompt with trending elements
+            # Prepare HOOK-FOCUSED image generation prompt with trending elements
+            effective_keywords = hook_keywords if hook_keywords else original_trend.split()[:3]
+            
             image_prompt = {
                 "product_name": ad_text['product'],
                 "features": ad_text['features'],
                 "brand_text": brand_text,
-                "cta_text": cta_text,
+                "cta_text": f"🔥 {original_trend} 🔥 {cta_text}",  # Add trending hook to CTA
                 "scene": ad_text['scene'],
                 "trending_boost": True,  # Flag for image generator to apply extra effects
-                "trending_topic": ad_text.get('trending_topic', original_trend)
+                "trending_topic": ad_text.get('trending_topic', original_trend),
+                "trending_keywords": effective_keywords,  # Key words for visual emphasis
+                "hook_mode": True  # Special flag for hook-focused generation
             }
             
-            logger.info("Enhanced trending image generation prompt prepared", extra={
+            logger.info("HOOK-FOCUSED trending image generation prompt prepared", extra={
                 "prompt_size": len(json.dumps(image_prompt)),
-                "trending_topic": image_prompt.get("trending_topic")
+                "trending_topic": image_prompt.get("trending_topic"),
+                "trending_keywords": effective_keywords,
+                "hook_cta": image_prompt["cta_text"],
+                "hook_source": "extracted" if hook_keywords else "split_trend"
             })
 
             # Image Generator call with trending boost

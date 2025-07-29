@@ -114,8 +114,10 @@ class ImagePrompt(BaseModel):
     brand_text: str
     cta_text: str
     scene: str
-    trending_boost: bool = False  # New field for trending mode
-    trending_topic: str = ""      # New field for trending topic
+    trending_boost: bool = False      # Flag for trending mode
+    trending_topic: str = ""          # Full trending topic
+    trending_keywords: list[str] = [] # Key words from trend for visual emphasis
+    hook_mode: bool = False           # Flag for hook-focused generation
 
 
 # Utility: add branding/CTA overlays with enhanced readability
@@ -234,16 +236,34 @@ def generate_ad(data: ImagePrompt):
                 "brand_text": data.brand_text[:50] + "..." if len(data.brand_text) > 50 else data.brand_text,
                 "cta_text": data.cta_text[:50] + "..." if len(data.cta_text) > 50 else data.cta_text,
                 "trending_boost": data.trending_boost,
-                "trending_topic": data.trending_topic[:50] + "..." if len(data.trending_topic) > 50 else data.trending_topic
+                "trending_topic": data.trending_topic[:50] + "..." if len(data.trending_topic) > 50 else data.trending_topic,
+                "hook_mode": data.hook_mode,
+                "trending_keywords": data.trending_keywords[:3] if data.trending_keywords else []
             })
             
             log_gpu_usage(logger, "before_generation")
-            # 1. Build the prompt
+            # 1. Build the HOOK-FOCUSED prompt
             with TimingContext("prompt_building", logger):
                 # Base prompt for better text readability
                 base_prompt = (f"{data.scene}, clean composition, balanced lighting, "
                          f"clear areas for text overlay, high contrast, professional advertising style, "
                          f"uncluttered layout, space for branding elements")
+                
+                # Add trending keyword hooks for visual emphasis
+                if data.hook_mode and data.trending_keywords:
+                    keyword_hooks = ", ".join([f"prominent {keyword} elements" for keyword in data.trending_keywords[:3]])
+                    visual_hooks = [
+                        "attention-grabbing focal points", "viral content style", "social media impact",
+                        "trending visual language", "hook-focused composition", "scroll-stopping design"
+                    ]
+                    hook_enhancement = f", {keyword_hooks}, " + ", ".join(random.sample(visual_hooks, 2))
+                    base_prompt = f"{base_prompt}{hook_enhancement}"
+                    
+                    logger.info("Applied HOOK-FOCUSED enhancement", extra={
+                        "trending_keywords": data.trending_keywords,
+                        "keyword_hooks": keyword_hooks,
+                        "hook_mode": True
+                    })
                 
                 # Add trending boost effects if enabled
                 if data.trending_boost:

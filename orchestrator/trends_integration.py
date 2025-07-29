@@ -390,6 +390,30 @@ class SecureTrendsProcessor:
         ]
         return random.sample(fallback_topics, min(10, len(fallback_topics)))
     
+    def extract_hook_keywords(self, trend: str) -> List[str]:
+        """Extract key hook words from trending topic for visual emphasis"""
+        import re
+        
+        # Clean the trend
+        clean_trend = self._clean_trend_title(trend)
+        
+        # Split into words and filter
+        words = re.findall(r'\b\w+\b', clean_trend.lower())
+        
+        # Filter out common words
+        stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+            'from', 'up', 'about', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
+            'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those'
+        }
+        
+        # Keep meaningful words (length > 2, not in stop words)
+        keywords = [word for word in words if len(word) > 2 and word not in stop_words]
+        
+        # Return top 3 most impactful keywords
+        return keywords[:3] if keywords else ['trending', 'viral', 'popular']
+    
     def create_spiced_story(self, trends: List[str]) -> Dict[str, str]:
         """Create a spiced-up story from trending topics"""
         try:
@@ -484,12 +508,17 @@ async def get_trending_spiced_story() -> Dict[str, str]:
             logger.warning("No trends fetched from any source, using fallback")
             return trends_processor._get_fallback_story()
         
-        # Create spiced story
+        # Create spiced story with hook keywords
         story_data = trends_processor.create_spiced_story(trends)
         
-        logger.info("Successfully generated trending spiced story", extra={
+        # Add hook keywords for visual emphasis
+        if 'original_trend' in story_data:
+            story_data['hook_keywords'] = trends_processor.extract_hook_keywords(story_data['original_trend'])
+        
+        logger.info("Successfully generated trending spiced story with hooks", extra={
             "trend_count": len(trends),
             "story_length": len(story_data.get("spiced_story", "")),
+            "hook_keywords": story_data.get('hook_keywords', []),
             "cache_used": trends_processor._is_cache_valid()
         })
         

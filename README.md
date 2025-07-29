@@ -25,11 +25,20 @@ The application consists of 4 microservices:
 - **Image Generator** (Port 5001): Stable Diffusion XL service for creating product images with temporary storage
 - **Poster Service** (Port 5002): Mock service for posting/publishing generated ads
 
-### 🔥 New: Google Trends Integration
-- **Trending Ads**: Generate advertisements based on current Google Trends (`/run/trending`)
-- **Real-time Trends**: Fetch current trending topics (`/trends`)
-- **Enhanced Visuals**: Trending mode applies special effects for viral appeal
-- **Smart Filtering**: Automatically avoids sensitive topics, focuses on positive trends
+### 🔥 New: Trending Hooks Integration
+- **Hook-Focused Ads**: Uses trending keywords as primary attention-grabbing hooks (`/run/trending`)
+- **Multi-Source Trends**: Fetches from Google Trends, Reddit, and curated topics (`/trends`)
+- **Visual Hook Enhancement**: Trending keywords prominently featured in image composition
+- **Smart Keyword Extraction**: Automatically identifies most impactful words from trends
+- **Viral Appeal**: Enhanced CTAs and visual elements designed for maximum engagement
+
+**⚠️ Current Status**: Google Trends API access may be limited. System falls back to Reddit trending topics and curated seasonal content when Google sources are unavailable.
+
+### 🎯 How Hook Strategy Works:
+1. **Trend Analysis**: Extracts key hook words from trending topics
+2. **Content Integration**: Uses trends as primary selling angle, not just background
+3. **Visual Emphasis**: Images feature trending elements prominently 
+4. **CTA Enhancement**: Call-to-action includes trending keywords for FOMO effect
 
 See **[TRENDING_FEATURE.md](TRENDING_FEATURE.md)** for detailed documentation.
 
@@ -160,6 +169,30 @@ $body = @{
 
 Invoke-RestMethod -Uri "http://localhost:8000/run" -Method Post -Body $body -ContentType "application/json"
 ```
+
+### 🎯 Generate Hook-Focused Trending Advertisements
+
+For maximum viral appeal, use the trending endpoint which incorporates current popular topics as hooks:
+
+**Example Trending Request:**
+```powershell
+$trendingBody = @{
+    product = "Smart Water Bottle"
+    audience = "health-conscious millennials"
+    tone = "excited and trendy"
+    ASIN = "B08XYZ789"
+    brand_text = "HydroSmart"
+    cta_text = "Join the Movement!"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/run/trending" -Method Post -Body $trendingBody -ContentType "application/json"
+```
+
+**Trending Response Features:**
+- **Hook-Led Copy**: "Join the 'meirl' wellness trend with HydroSmart..."
+- **Enhanced CTA**: "🔥 meirl 🔥 Join the Movement!"
+- **Visual Hooks**: Images prominently feature trending elements
+- **Viral Language**: Uses current social media phrases and trending terminology
 
 ### Expected Response
 The API will return a JSON object containing:
@@ -412,6 +445,8 @@ Once running, visit:
 
 #### Key Endpoints
 - **POST /run**: Generate complete advertisement (copy + image)
+- **POST /run/trending**: Generate hook-focused advertisement using current trends
+- **GET /trends**: Fetch current trending topics and debug information
 - **GET /download/{filename}**: Download generated images (expires in 10 minutes)
 
 ## � Quick Reference
