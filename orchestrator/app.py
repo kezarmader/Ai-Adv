@@ -11,6 +11,7 @@ from logging_config import (
 )
 from json_repair_engine import parse_llm_json_with_repair
 from trends_integration import get_trending_spiced_story, get_trends_debug_info
+from amazon_lookup import get_enhanced_product_info
 
 # Setup structured logging
 logger = setup_logging("orchestrator", "DEBUG")
@@ -108,6 +109,21 @@ async def run_trending_ad_campaign(req: Request):
                     "has_brand_text": bool(brand_text),
                     "has_cta_text": bool(cta_text)
                 })
+
+            # ASIN Enhancement - Get real product details from Amazon
+            with TimingContext("asin_product_enhancement", logger):
+                if asin:
+                    logger.info(f"Enhancing product info with ASIN lookup: {asin}")
+                    enhanced_product = await get_enhanced_product_info(product, asin)
+                    logger.info("ASIN enhancement completed", extra={
+                        "original_product": product,
+                        "enhanced_length": len(enhanced_product),
+                        "asin": asin,
+                        "enhancement_applied": enhanced_product != product
+                    })
+                    product = enhanced_product
+                else:
+                    logger.info("No ASIN provided, using original product description")
 
             # Get trending spiced story with hook keywords
             with TimingContext("trending_story_generation", logger):
@@ -473,6 +489,21 @@ async def run_ad_campaign(req: Request):
                     "has_brand_text": bool(brand_text),
                     "has_cta_text": bool(cta_text)
                 })
+
+            # ASIN Enhancement - Get real product details from Amazon  
+            with TimingContext("asin_product_enhancement", logger):
+                if asin:
+                    logger.info(f"Enhancing product info with ASIN lookup: {asin}")
+                    enhanced_product = await get_enhanced_product_info(product, asin)
+                    logger.info("ASIN enhancement completed", extra={
+                        "original_product": product,
+                        "enhanced_length": len(enhanced_product),
+                        "asin": asin,
+                        "enhancement_applied": enhanced_product != product
+                    })
+                    product = enhanced_product
+                else:
+                    logger.info("No ASIN provided, using original product description")
 
             # Generate LLM prompt
             context = f"""IMPORTANT: You must output a single, valid UTF‑8 JSON object. Absolutely nothing else.
