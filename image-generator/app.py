@@ -251,6 +251,7 @@ def generate_ad(data: ImagePrompt):
                 
                 # Add trending keyword hooks for visual emphasis
                 if data.hook_mode and data.trending_keywords:
+                    import random  # Import here for hook functionality
                     keyword_hooks = ", ".join([f"prominent {keyword} elements" for keyword in data.trending_keywords[:3]])
                     visual_hooks = [
                         "attention-grabbing focal points", "viral content style", "social media impact",
