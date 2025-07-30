@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from infrastructure.middleware import LoggingMiddleware
 from infrastructure.dependencies import setup_dependencies
 from infrastructure.config import config
+from infrastructure.prompts import prompt_config
 from logging_config import setup_logging
 
 # Setup logging
@@ -26,3 +27,12 @@ async def run_ad_campaign(request: Request):
 async def download_image(filename: str, request: Request):
     """Proxy endpoint to download images from image-generator service"""
     return await controller.download_image(filename, request)
+
+@app.get("/admin/prompts")
+async def list_prompt_templates():
+    """List available LLM prompt templates (admin endpoint)"""
+    return {
+        "current_template": config.LLM_PROMPT_TEMPLATE,
+        "available_templates": prompt_config.list_available_templates(),
+        "custom_template_configured": bool(config.LLM_CUSTOM_PROMPT)
+    }

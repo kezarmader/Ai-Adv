@@ -14,7 +14,8 @@ def setup_dependencies() -> AdCampaignController:
     # External adapters (outbound ports)
     llm_adapter = LLMAdapter(
         llm_url=config.LLM_SERVICE_URL,
-        model=config.LLM_MODEL
+        model=config.LLM_MODEL,
+        prompt_template=config.LLM_PROMPT_TEMPLATE
     )
     
     image_adapter = ImageAdapter(

@@ -10,6 +10,8 @@ class Config:
     
     # LLM Configuration
     LLM_MODEL: str = os.getenv("LLM_MODEL", "llama3")
+    LLM_PROMPT_TEMPLATE: str = os.getenv("LLM_PROMPT_TEMPLATE", "standard")
+    LLM_CUSTOM_PROMPT: str = os.getenv("LLM_CUSTOM_PROMPT", "")
     
     # Logging Configuration
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "DEBUG")
