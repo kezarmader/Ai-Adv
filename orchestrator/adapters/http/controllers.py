@@ -30,7 +30,8 @@ class AdCampaignController:
                 "product": request_model.product,
                 "audience": request_model.audience,
                 "tone": request_model.tone,
-                "asin": request_model.ASIN
+                "asin": request_model.ASIN,
+                "template": request_model.template
             })
             
             # Convert to domain entities
@@ -54,7 +55,8 @@ class AdCampaignController:
                 audience=audience,
                 brand_text=request_model.brand_text,
                 cta_text=request_model.cta_text,
-                host=host
+                host=host,
+                template=request_model.template
             )
             
             # Convert to response model

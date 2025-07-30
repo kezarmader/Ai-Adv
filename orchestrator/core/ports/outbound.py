@@ -6,7 +6,7 @@ class LLMPort(ABC):
     """Port for LLM text generation"""
     
     @abstractmethod
-    async def generate_ad_text(self, product: Product, audience: Audience) -> AdText:
+    async def generate_ad_text(self, product: Product, audience: Audience, template: str = None) -> AdText:
         """Generate advertisement text"""
         pass
 

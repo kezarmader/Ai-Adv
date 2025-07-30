@@ -9,6 +9,7 @@ class AdCampaignRequestModel(BaseModel):
     ASIN: str = Field(..., description="Amazon product ID")
     brand_text: Optional[str] = Field(None, description="Brand text for image")
     cta_text: Optional[str] = Field(None, description="Call-to-action text")
+    template: Optional[str] = Field(None, description="Prompt template to use: 'standard', 'creative', 'tech', 'concise', or custom prompt text")
 
 class AdCampaignResponseModel(BaseModel):
     """HTTP response model for ad campaign"""

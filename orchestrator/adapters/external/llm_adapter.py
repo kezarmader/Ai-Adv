@@ -16,10 +16,10 @@ class LLMAdapter(LLMPort):
         self.model = model
         self.prompt_template = prompt_template
     
-    async def generate_ad_text(self, product: Product, audience: Audience) -> AdText:
+    async def generate_ad_text(self, product: Product, audience: Audience, template: str = None) -> AdText:
         """Generate advertisement text using LLM"""
         
-        prompt = self._build_prompt(product, audience)
+        prompt = self._build_prompt(product, audience, template)
         
         logger.debug("Making LLM request", extra={"model": self.model})
         
@@ -60,12 +60,37 @@ class LLMAdapter(LLMPort):
         
         return ad_text
     
-    def _build_prompt(self, product: Product, audience: Audience) -> str:
+    def _build_prompt(self, product: Product, audience: Audience, template: str = None) -> str:
         """Build the LLM prompt for ad generation using configured template"""
-        return prompt_config.format_prompt(
-            template_name=self.prompt_template,
-            product_name=product.name,
-            audience_demographics=audience.demographics,
-            tone=audience.tone,
-            asin=product.asin
-        )
+        
+        # Use runtime template if provided, otherwise fall back to default
+        template_to_use = template or self.prompt_template
+        
+        # Check if it's a predefined template name or custom prompt text
+        available_templates = prompt_config.list_available_templates()
+        if template_to_use in available_templates:
+            # Use predefined template
+            return prompt_config.format_prompt(
+                template_name=template_to_use,
+                product_name=product.name,
+                audience_demographics=audience.demographics,
+                tone=audience.tone,
+                asin=product.asin
+            )
+        elif template_to_use:
+            # Use as custom prompt template
+            return template_to_use.format(
+                product_name=product.name,
+                audience_demographics=audience.demographics,
+                tone=audience.tone,
+                asin=product.asin
+            )
+        else:
+            # Fallback to default configured template
+            return prompt_config.format_prompt(
+                template_name=self.prompt_template,
+                product_name=product.name,
+                audience_demographics=audience.demographics,
+                tone=audience.tone,
+                asin=product.asin
+            )

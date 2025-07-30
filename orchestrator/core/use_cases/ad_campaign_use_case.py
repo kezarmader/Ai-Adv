@@ -28,7 +28,8 @@ class AdCampaignUseCase(AdCampaignUseCasePort):
         audience: Audience,
         brand_text: str = None,
         cta_text: str = None,
-        host: str = None
+        host: str = None,
+        template: str = None
     ) -> AdCampaign:
         """Generate a complete ad campaign"""
         
@@ -39,11 +40,12 @@ class AdCampaignUseCase(AdCampaignUseCasePort):
             "product": product.name,
             "audience": audience.demographics,
             "tone": audience.tone,
-            "host": actual_host
+            "host": actual_host,
+            "template": template
         })
         
         # Step 1: Generate ad text
-        ad_text = await self.llm_service.generate_ad_text(product, audience)
+        ad_text = await self.llm_service.generate_ad_text(product, audience, template)
         logger.info("Ad text generated successfully")
         
         # Step 2: Generate image

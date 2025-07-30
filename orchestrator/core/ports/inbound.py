@@ -12,7 +12,8 @@ class AdCampaignUseCasePort(ABC):
         audience: Audience,
         brand_text: str = None,
         cta_text: str = None,
-        host: str = None
+        host: str = None,
+        template: str = None
     ) -> AdCampaign:
         """Generate a complete ad campaign"""
         pass

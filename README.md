@@ -123,6 +123,7 @@ Send a POST request to the orchestrator with the following fields:
 | `ASIN` | string | Yes | Amazon product ID (for reference) |
 | `brand_text` | string | Yes | Brand name to display on image |
 | `cta_text` | string | Yes | Call-to-action text for the image |
+| `template` | string | No | Prompt template: "standard", "creative", "tech", "concise", or custom prompt text |
 
 **Example using curl:**
 ```powershell
@@ -148,6 +149,7 @@ $body = @{
     ASIN = "B08N5WRWNW"
     brand_text = "SoundFit Pro"
     cta_text = "Get Yours Today!"
+    template = "creative"  # Use creative template for this request
 } | ConvertTo-Json
 
 Invoke-RestMethod -Uri "http://localhost:8000/run" -Method Post -Body $body -ContentType "application/json"
@@ -193,6 +195,45 @@ Typical response times (varies by hardware):
 - **Image download**: <1 second
 
 Response times depend on GPU performance and available VRAM.
+
+## 🎨 Prompt Templates & Advanced Usage
+
+The orchestrator supports multiple prompt templates for different types of products and use cases:
+
+### Available Templates
+- **`standard`** (default): Balanced approach for e-commerce products
+- **`creative`**: Lifestyle and emotional products (fashion, home decor)
+- **`tech`**: Technical products with specifications (software, hardware)
+- **`concise`**: Quick generation for testing and bulk operations
+
+### Using Different Templates
+```powershell
+# Set environment variable for creative template
+$env:LLM_PROMPT_TEMPLATE = "creative"
+docker-compose up
+
+# Or modify docker-compose.yml
+services:
+  orchestrator:
+    environment:
+      - LLM_PROMPT_TEMPLATE=tech
+```
+
+### Custom Prompts
+```powershell
+# Use completely custom prompt
+$env:LLM_CUSTOM_PROMPT = "Generate a professional advertisement for {product_name} targeting {audience_demographics}..."
+```
+
+### Check Current Configuration
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/admin/prompts"
+```
+
+📚 **For complete usage examples and advanced configuration, see:**
+- **[USER_GUIDE.md](orchestrator/USER_GUIDE.md)** - Comprehensive usage guide with examples
+- **[API_REFERENCE.md](orchestrator/API_REFERENCE.md)** - Complete API documentation
+- **[test_api.py](orchestrator/test_api.py)** - Example script to test all features
 
 ## 🔧 Configuration
 
