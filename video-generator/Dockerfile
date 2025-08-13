@@ -25,9 +25,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install PyTorch 2.8.0 with CUDA 12.8 support for RTX 5090 sm_120
+# Install PyTorch nightly with CUDA 12.8 support for RTX 5090 sm_120
 RUN pip install --upgrade pip && \
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Copy requirements and install other dependencies (excluding torch)
 COPY requirements.txt .
@@ -35,7 +35,7 @@ RUN grep -v 'torch' requirements.txt > temp_requirements.txt && \
     pip install -r temp_requirements.txt --no-cache-dir
 
 # Install xformers separately to ensure CUDA compatibility
-RUN pip install xformers==0.0.25 --no-deps --force-reinstall
+RUN pip install --pre xformers --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Setup HuggingFace cache for AI models (match docker-compose volume)
 ENV HF_HOME=/app/.cache/huggingface
