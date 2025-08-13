@@ -40,6 +40,35 @@ services:
           devices:
             - capabilities: [gpu]
 
+  video-generator:
+    build: ./video-generator
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0"        # Use RTX 5090
+      # NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # PyTorch memory optimization for large models
+      PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:512
+      # HuggingFace cache directory
+      HF_HOME: /app/.cache/huggingface
+      # Additional GPU optimizations
+      CUDA_VISIBLE_DEVICES: "0"
+      TORCH_CUDA_ARCH_LIST: "8.9;9.0"   # RTX 5090 Blackwell + Ada Lovelace architecture
+    volumes:
+      # Cache AI models to avoid re-downloading
+      - video_models:/app/.cache/huggingface
+    networks: [app-net]
+    expose:
+      - "5003"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+        limits:
+          # Allow video generator to use more memory for large models
+          memory: 16G
+
   poster-service:
     build: ./poster-service
     networks: [app-net]
@@ -51,6 +80,7 @@ services:
     depends_on:
       - llm-service
       - image-generator
+      - video-generator
       - poster-service
     networks: [app-net]
     ports:
@@ -58,6 +88,7 @@ services:
 
 volumes:
   ollama:
+  video_models:  # Cache for AI video models
 
 networks:
   app-net:

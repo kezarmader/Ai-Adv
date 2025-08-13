@@ -1,0 +1,11 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+diffusers==0.30.0
+transformers==4.44.0
+accelerate==0.33.0
+xformers==0.0.27.post2
+pillow==10.1.0
+numpy==1.24.3
+requests==2.31.0
+safetensors==0.4.0

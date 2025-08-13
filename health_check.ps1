@@ -11,6 +11,7 @@ param(
 $Services = @{
     "orchestrator" = "http://localhost:8000"
     "image-generator" = "http://localhost:5001"
+    "video-generator" = "http://localhost:5003"
     "poster-service" = "http://localhost:5002"
     "llm-service" = "http://localhost:11434"
 }
@@ -58,6 +59,7 @@ function Test-AdGeneration {
         ASIN = "B08N5WRWNW"
         brand_text = "TestBrand"
         cta_text = "Try Now!"
+        generate_video = $true
     } | ConvertTo-Json
 
     try {
@@ -75,6 +77,7 @@ function Test-AdGeneration {
             Duration = "$([math]::Round($duration, 2))s"
             HasAdText = $response.PSObject.Properties.Name -contains "ad_text"
             HasImageUrl = $response.PSObject.Properties.Name -contains "image_url"
+            HasVideoUrl = $response.PSObject.Properties.Name -contains "video_url"
             PostStatus = $response.post_status.status
         }
     }

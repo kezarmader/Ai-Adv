@@ -2,7 +2,7 @@ import logging
 from fastapi import Request, HTTPException
 from fastapi.responses import Response
 from core.domain.entities import Product, Audience
-from core.ports.inbound import AdCampaignUseCasePort, ImageDownloadUseCasePort
+from core.ports.inbound import AdCampaignUseCasePort, ImageDownloadUseCasePort, VideoDownloadUseCasePort
 from adapters.http.models import AdCampaignRequestModel, AdCampaignResponseModel
 
 logger = logging.getLogger(__name__)
@@ -13,10 +13,12 @@ class AdCampaignController:
     def __init__(
         self, 
         ad_campaign_use_case: AdCampaignUseCasePort,
-        image_download_use_case: ImageDownloadUseCasePort
+        image_download_use_case: ImageDownloadUseCasePort,
+        video_download_use_case: VideoDownloadUseCasePort
     ):
         self.ad_campaign_use_case = ad_campaign_use_case
         self.image_download_use_case = image_download_use_case
+        self.video_download_use_case = video_download_use_case
     
     async def generate_campaign(self, request: Request) -> AdCampaignResponseModel:
         """Handle ad campaign generation request"""
@@ -30,7 +32,8 @@ class AdCampaignController:
                 "product": request_model.product,
                 "audience": request_model.audience,
                 "tone": request_model.tone,
-                "asin": request_model.ASIN
+                "asin": request_model.ASIN,
+                "generate_video": request_model.generate_video
             })
             
             # Convert to domain entities
@@ -54,15 +57,27 @@ class AdCampaignController:
                 audience=audience,
                 brand_text=request_model.brand_text,
                 cta_text=request_model.cta_text,
-                host=host
+                host=host,
+                generate_video=request_model.generate_video
             )
             
             # Convert to response model
-            return AdCampaignResponseModel(
-                ad_text=campaign.ad_text.to_dict(),
-                image_url=campaign.image.url,
-                post_status=campaign.post_status
-            )
+            response_data = {
+                "ad_text": campaign.ad_text.to_dict(),
+                "image_url": campaign.image.url,
+                "post_status": campaign.post_status
+            }
+            
+            # Add video information if available
+            if campaign.video:
+                response_data["video_url"] = campaign.video.url
+                response_data["video_info"] = {
+                    "duration_seconds": campaign.video.duration_seconds,
+                    "fps": campaign.video.fps,
+                    "file_size_mb": campaign.video.file_size_mb
+                }
+            
+            return AdCampaignResponseModel(**response_data)
             
         except ValueError as e:
             logger.error("Validation error", extra={"error": str(e)})
@@ -102,6 +117,40 @@ class AdCampaignController:
             raise HTTPException(status_code=404, detail="Image not found or has expired")
         except Exception as e:
             logger.error("Unexpected error during image download", extra={
+                "filename": filename,
+                "error": str(e),
+                "error_type": type(e).__name__
+            })
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    async def download_video(self, filename: str, request: Request) -> Response:
+        """Handle video download request"""
+        
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            logger.info("Video download request", extra={
+                "filename": filename,
+                "client_ip": client_ip
+            })
+            
+            # Execute use case
+            video_content = await self.video_download_use_case.download_video(filename)
+            
+            # Return response
+            return Response(
+                content=video_content,
+                media_type="video/mp4",
+                headers={
+                    "Content-Disposition": f"attachment; filename={filename}",
+                    "Content-Type": "video/mp4",
+                    "Content-Length": str(len(video_content))
+                }
+            )
+            
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Video not found or has expired")
+        except Exception as e:
+            logger.error("Unexpected error during video download", extra={
                 "filename": filename,
                 "error": str(e),
                 "error_type": type(e).__name__

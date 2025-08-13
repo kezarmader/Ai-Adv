@@ -26,3 +26,8 @@ async def run_ad_campaign(request: Request):
 async def download_image(filename: str, request: Request):
     """Proxy endpoint to download images from image-generator service"""
     return await controller.download_image(filename, request)
+
+@app.get("/download-video/{filename}")
+async def download_video(filename: str, request: Request):
+    """Proxy endpoint to download videos from video-generator service"""
+    return await controller.download_video(filename, request)

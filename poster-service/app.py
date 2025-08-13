@@ -59,8 +59,10 @@ async def mock_post(req: Request):
         logger.info("Advertisement post request received", extra={
             "has_text": "text" in data and bool(data["text"]),
             "has_image_url": "image_url" in data and bool(data["image_url"]),
+            "has_video_url": "video_url" in data and bool(data["video_url"]),
             "text_preview": str(data.get("text", {}))[:100] + "..." if len(str(data.get("text", {}))) > 100 else str(data.get("text", {})),
-            "image_url": data.get("image_url", "")
+            "image_url": data.get("image_url", ""),
+            "video_url": data.get("video_url", "")
         })
         
         # Simulate posting delay

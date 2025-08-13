@@ -12,7 +12,7 @@ class PostingAdapter(PostingPort):
     def __init__(self, post_service_url: str = "http://poster-service:5002"):
         self.post_service_url = post_service_url
     
-    async def post_advertisement(self, ad_text: AdText, image_url: str) -> Dict[str, Any]:
+    async def post_advertisement(self, ad_text: AdText, image_url: str, video_url: str = None) -> Dict[str, Any]:
         """Post advertisement and return status"""
         
         post_data = {
@@ -20,8 +20,12 @@ class PostingAdapter(PostingPort):
             "image_url": image_url
         }
         
+        if video_url:
+            post_data["video_url"] = video_url
+        
         logger.info("Posting advertisement", extra={
-            "image_url": image_url
+            "image_url": image_url,
+            "has_video": bool(video_url)
         })
         
         response = requests.post(

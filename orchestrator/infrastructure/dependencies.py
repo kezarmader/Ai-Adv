@@ -1,8 +1,10 @@
 # Dependency injection and composition root
 from core.use_cases.ad_campaign_use_case import AdCampaignUseCase
 from core.use_cases.image_download_use_case import ImageDownloadUseCase
+from core.use_cases.video_download_use_case import VideoDownloadUseCase
 from adapters.external.llm_adapter import LLMAdapter
 from adapters.external.image_adapter import ImageAdapter
+from adapters.external.video_adapter import VideoAdapter
 from adapters.external.posting_adapter import PostingAdapter
 from adapters.external.url_generator_adapter import URLGeneratorAdapter
 from adapters.http.controllers import AdCampaignController
@@ -21,6 +23,10 @@ def setup_dependencies() -> AdCampaignController:
         image_service_url=config.IMAGE_SERVICE_URL
     )
     
+    video_adapter = VideoAdapter(
+        base_url=config.VIDEO_SERVICE_URL
+    )
+    
     posting_adapter = PostingAdapter(
         post_service_url=config.POST_SERVICE_URL
     )
@@ -31,6 +37,7 @@ def setup_dependencies() -> AdCampaignController:
     ad_campaign_use_case = AdCampaignUseCase(
         llm_service=llm_adapter,
         image_service=image_adapter,
+        video_service=video_adapter,
         posting_service=posting_adapter,
         url_generator=url_generator_adapter,
         default_host=config.DEFAULT_HOST
@@ -40,10 +47,15 @@ def setup_dependencies() -> AdCampaignController:
         image_service=image_adapter
     )
     
+    video_download_use_case = VideoDownloadUseCase(
+        video_service=video_adapter
+    )
+    
     # HTTP controller (inbound adapter)
     controller = AdCampaignController(
         ad_campaign_use_case=ad_campaign_use_case,
-        image_download_use_case=image_download_use_case
+        image_download_use_case=image_download_use_case,
+        video_download_use_case=video_download_use_case
     )
     
     return controller

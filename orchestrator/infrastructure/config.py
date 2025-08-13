@@ -6,6 +6,7 @@ class Config:
     # Service URLs
     LLM_SERVICE_URL: str = os.getenv("LLM_SERVICE_URL", "http://llm-service:11434")
     IMAGE_SERVICE_URL: str = os.getenv("IMAGE_SERVICE_URL", "http://image-generator:5001")
+    VIDEO_SERVICE_URL: str = os.getenv("VIDEO_SERVICE_URL", "http://video-generator:5003")
     POST_SERVICE_URL: str = os.getenv("POST_SERVICE_URL", "http://poster-service:5002")
     
     # LLM Configuration

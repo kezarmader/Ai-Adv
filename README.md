@@ -18,11 +18,12 @@ A microservices-based AI application that generates product advertisements using
 
 ## 🏗️ Architecture
 
-The application consists of 4 microservices:
+The application consists of 5 microservices:
 
-- **Orchestrator** (Port 8000): Main API that coordinates the entire ad generation workflow and provides image download proxy
+- **Orchestrator** (Port 8000): Main API that coordinates the entire ad generation workflow and provides download proxy
 - **LLM Service** (Port 11434): Ollama service running Llama3 for text generation
 - **Image Generator** (Port 5001): Stable Diffusion XL service for creating product images with temporary storage
+- **Video Generator** (Port 5003): AI-powered service using Stable Video Diffusion for creating animated videos from generated images
 - **Poster Service** (Port 5002): Mock service for posting/publishing generated ads
 
 ## ⚠️ Privacy & Data Disclaimer
@@ -123,6 +124,7 @@ Send a POST request to the orchestrator with the following fields:
 | `ASIN` | string | Yes | Amazon product ID (for reference) |
 | `brand_text` | string | Yes | Brand name to display on image |
 | `cta_text` | string | Yes | Call-to-action text for the image |
+| `generate_video` | boolean | No | Whether to generate an animated video (default: true) |
 
 **Example using curl:**
 ```powershell
@@ -135,7 +137,8 @@ curl -X POST "http://localhost:8000/run" `
     "tone": "energetic and motivating",
     "ASIN": "B08N5WRWNW",
     "brand_text": "SoundFit Pro",
-    "cta_text": "Get Yours Today!"
+    "cta_text": "Get Yours Today!",
+    "generate_video": true
   }'
 ```
 
@@ -148,6 +151,7 @@ $body = @{
     ASIN = "B08N5WRWNW"
     brand_text = "SoundFit Pro"
     cta_text = "Get Yours Today!"
+    generate_video = $true
 } | ConvertTo-Json
 
 Invoke-RestMethod -Uri "http://localhost:8000/run" -Method Post -Body $body -ContentType "application/json"
@@ -156,7 +160,9 @@ Invoke-RestMethod -Uri "http://localhost:8000/run" -Method Post -Body $body -Con
 ### Expected Response
 The API will return a JSON object containing:
 - **ad_text**: Complete generated advertisement with product details, features, and scene description
-- **image_url**: Download URL for the generated product image (valid for 10 minutes)  
+- **image_url**: Download URL for the generated product image (valid for 10 minutes)
+- **video_url**: Download URL for the generated animated video (valid for 10 minutes, optional)
+- **video_info**: Video details including duration, fps, and file size (if video generated)
 - **post_status**: Status from the mock posting service
 
 Example response:
@@ -171,26 +177,36 @@ Example response:
     "scene": "A fitness enthusiast wearing headphones during an intense workout session"
   },
   "image_url": "http://localhost:8000/download/a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
+  "video_url": "http://localhost:8000/download-video/b2c3d4e5-f6g7-8901-bcde-f23456789012.mp4",
+  "video_info": {
+    "duration_seconds": 5,
+    "fps": 24,
+    "file_size_mb": 2.5
+  },
   "post_status": {"status": "success", "message": "Advertisement posted successfully to mock platform"}
 }
 ```
 
-### Download Generated Images
-Images are temporarily stored and can be downloaded using the provided URL:
+### Download Generated Content
+Images and videos are temporarily stored and can be downloaded using the provided URLs:
 ```powershell
 # Download the generated image
 Invoke-WebRequest -Uri "http://localhost:8000/download/[filename].png" -OutFile "advertisement.png"
+
+# Download the generated video
+Invoke-WebRequest -Uri "http://localhost:8000/download-video/[filename].mp4" -OutFile "advertisement.mp4"
 ```
 
-**Note**: Generated images are automatically deleted after 10 minutes for security and storage management.
+**Note**: Generated images and videos are automatically deleted after 10 minutes for security and storage management.
 
 ### Performance Expectations
 Typical response times (varies by hardware):
-- **First request**: 60-120 seconds (model loading)
-- **Subsequent requests**: 15-30 seconds
+- **First request**: 90-150 seconds (model loading)
+- **Subsequent requests**: 20-45 seconds
 - **LLM generation**: 5-15 seconds  
 - **Image generation**: 8-20 seconds
-- **Image download**: <1 second
+- **Video generation**: 5-15 seconds
+- **Content download**: <1 second
 
 Response times depend on GPU performance and available VRAM.
 
@@ -430,6 +446,7 @@ docker-compose down -v && docker-compose up --build
 - **Main API**: http://localhost:8000 (see /docs for API documentation)
 - **LLM Service**: http://localhost:11434 (Ollama)
 - **Image Generator**: http://localhost:5001 (see /docs)
+- **Video Generator**: http://localhost:5003 (see /docs)
 - **Poster Service**: http://localhost:5002 (see /docs)
 
 ### Important Files

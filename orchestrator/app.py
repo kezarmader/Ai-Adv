@@ -98,6 +98,7 @@ async def run_ad_campaign(req: Request):
                 asin = body.get("ASIN")
                 brand_text = body.get("brand_text")
                 cta_text = body.get("cta_text")
+                generate_video = body.get("generate_video", True)  # Default to True
                 
                 logger.info("Ad generation request received", extra={
                     "product": product,
@@ -105,7 +106,8 @@ async def run_ad_campaign(req: Request):
                     "tone": tone,
                     "asin": asin,
                     "has_brand_text": bool(brand_text),
-                    "has_cta_text": bool(cta_text)
+                    "has_cta_text": bool(cta_text),
+                    "generate_video": generate_video
                 })
 
             # Generate LLM prompt
@@ -245,20 +247,85 @@ async def run_ad_campaign(req: Request):
                     "image_url": image_url
                 })
 
+            # Generate video if requested
+            video_url = None
+            video_info = None
+            if generate_video:
+                try:
+                    with TimingContext("video_generation", logger) as video_timer:
+                        logger.info("Starting video generation")
+                        
+                        video_prompt = {
+                            "image_filename": filename,
+                            "scene": ad_text['scene'],
+                            "duration_seconds": 5,
+                            "fps": 24
+                        }
+                        
+                        start_time = time.time()
+                        video_response = requests.post("http://video-generator:5003/generate", json=video_prompt, timeout=120)
+                        duration_ms = (time.time() - start_time) * 1000
+                        
+                        logger.info("Video generation request completed", extra={
+                            "service": "video-generator",
+                            "endpoint": "/generate",
+                            "status_code": video_response.status_code,
+                            "duration_ms": round(duration_ms, 2),
+                            "prompt_size": len(json.dumps(video_prompt))
+                        })
+                        
+                        if video_response.status_code == 200:
+                            video_data = video_response.json()
+                            video_filename = video_data.get("filename", "")
+                            
+                            if video_filename:
+                                video_url = f"http://{host}/download-video/{video_filename}"
+                                video_info = {
+                                    "duration_seconds": video_data.get("duration_seconds", 5),
+                                    "fps": video_data.get("fps", 24),
+                                    "file_size_mb": video_data.get("file_size_mb", 0.0)
+                                }
+                                
+                                logger.info("Video generation successful", extra={
+                                    "video_filename": video_filename,
+                                    "video_url": video_url,
+                                    "file_size_mb": video_info["file_size_mb"]
+                                })
+                            else:
+                                logger.warning("Video generation completed but no filename returned")
+                        else:
+                            logger.warning("Video generation failed", extra={
+                                "status_code": video_response.status_code,
+                                "response_text": video_response.text[:500]
+                            })
+                            
+                except Exception as e:
+                    logger.warning("Video generation failed, continuing without video", extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__
+                    })
+                    # Continue without video if generation fails
+
             # Poster service call
             with TimingContext("post_service", logger):
                 start_time = time.time()
-                post_response = requests.post("http://poster-service:5002/post", json={
+                post_data = {
                     "text": ad_text,
                     "image_url": image_url
-                })
+                }
+                
+                if video_url:
+                    post_data["video_url"] = video_url
+                
+                post_response = requests.post("http://poster-service:5002/post", json=post_data)
                 duration_ms = (time.time() - start_time) * 1000
                 
                 logger.info("Poster service request completed", extra={
                     "service": "poster-service",
                     "endpoint": "/post",
                     "status_code": post_response.status_code,
-                    "duration_ms": round(duration_ms, 2)
+                    "duration_ms": round(duration_ms, 2),
+                    "has_video": bool(video_url)
                 })
 
             # Prepare final response
@@ -268,9 +335,15 @@ async def run_ad_campaign(req: Request):
                 "post_status": post_response.json() if post_response.status_code == 200 else {"status": "error", "message": "Post service unavailable"}
             }
             
+            # Add video information if available
+            if video_url:
+                final_response["video_url"] = video_url
+                final_response["video_info"] = video_info
+            
             logger.info("Ad campaign generation completed successfully", extra={
                 "total_duration_ms": round(timer.duration_ms, 2),
                 "image_filename": filename,
+                "video_url": video_url,
                 "post_status": final_response["post_status"].get("status", "unknown")
             })
             
@@ -369,6 +442,81 @@ async def download_image(filename: str, request: Request):
         except Exception as e:
             logger.error("Unexpected error during image download", extra={
                 "image_filename": filename,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "duration_ms": round(timer.duration_ms, 2) if timer else None
+            })
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/download-video/{filename}")
+async def download_video(filename: str, request: Request):
+    """Proxy endpoint to download videos from video-generator service"""
+    with TimingContext("video_download", logger, {"video_filename": filename}) as timer:
+        try:
+            client_ip = request.client.host if request.client else "unknown"
+            logger.info("Video download request", extra={
+                "video_filename": filename,
+                "client_ip": client_ip
+            })
+            
+            # Make request to video-generator service
+            start_time = time.time()
+            video_response = requests.get(f"http://video-generator:5003/download/{filename}")
+            duration_ms = (time.time() - start_time) * 1000
+            
+            logger.debug("Video download request completed", extra={
+                "service": "video-generator",
+                "endpoint": f"/download/{filename}",
+                "status_code": video_response.status_code,
+                "duration_ms": round(duration_ms, 2)
+            })
+            
+            if video_response.status_code == 404:
+                logger.warning("Video not found", extra={
+                    "video_filename": filename,
+                    "client_ip": client_ip
+                })
+                raise HTTPException(status_code=404, detail="Video not found or has expired")
+            elif video_response.status_code != 200:
+                logger.error("Error fetching video from generator", extra={
+                    "video_filename": filename,
+                    "status_code": video_response.status_code
+                })
+                raise HTTPException(status_code=video_response.status_code, detail="Error fetching video")
+            
+            # Log successful download
+            video_size = len(video_response.content)
+            logger.info("Video download successful", extra={
+                "video_filename": filename,
+                "client_ip": client_ip,
+                "video_size_bytes": video_size,
+                "video_size_mb": round(video_size / 1024 / 1024, 2),
+                "download_duration_ms": round(timer.duration_ms, 2)
+            })
+            
+            # Return the video content with proper headers
+            return Response(
+                content=video_response.content,
+                media_type="video/mp4",
+                headers={
+                    "Content-Disposition": f"attachment; filename={filename}",
+                    "Content-Type": "video/mp4",
+                    "Content-Length": str(video_size)
+                }
+            )
+            
+        except HTTPException:
+            raise
+        except requests.RequestException as e:
+            logger.error("Request error during video download", extra={
+                "video_filename": filename,
+                "error": str(e),
+                "duration_ms": round(timer.duration_ms, 2) if timer else None
+            })
+            raise HTTPException(status_code=500, detail=f"Error fetching video: {str(e)}")
+        except Exception as e:
+            logger.error("Unexpected error during video download", extra={
+                "video_filename": filename,
                 "error": str(e),
                 "error_type": type(e).__name__,
                 "duration_ms": round(timer.duration_ms, 2) if timer else None

@@ -12,7 +12,8 @@ class AdCampaignUseCasePort(ABC):
         audience: Audience,
         brand_text: str = None,
         cta_text: str = None,
-        host: str = None
+        host: str = None,
+        generate_video: bool = True
     ) -> AdCampaign:
         """Generate a complete ad campaign"""
         pass
@@ -23,4 +24,12 @@ class ImageDownloadUseCasePort(ABC):
     @abstractmethod
     async def download_image(self, filename: str) -> bytes:
         """Download image by filename"""
+        pass
+
+class VideoDownloadUseCasePort(ABC):
+    """Port for video download use case"""
+    
+    @abstractmethod
+    async def download_video(self, filename: str) -> bytes:
+        """Download video by filename"""
         pass
