@@ -104,29 +104,38 @@ def initialize_ai_pipeline():
     try:
         logger.info("Initializing Stable Video Diffusion pipeline...")
         
-        # Check if CUDA is available
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Check if CUDA is available - FAIL FAST if not
+        if not torch.cuda.is_available():
+            logger.error("CUDA is not available - GPU is required for video generation")
+            logger.error("Please ensure NVIDIA Container Toolkit is properly configured")
+            return False
+        
+        device = "cuda"
         logger.info(f"Using device: {device}")
+        
+        # Log GPU information
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory // (1024**3)
+        logger.info(f"GPU detected: {gpu_name}, Memory: {gpu_memory}GB")
         
         # Load the pipeline
         pipeline = StableVideoDiffusionPipeline.from_pretrained(
             MODEL_ID, 
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-            variant="fp16" if device == "cuda" else None
+            torch_dtype=torch.float16,
+            variant="fp16"
         )
         
-        if device == "cuda":
-            pipeline = pipeline.to(device)
-            # Enable memory efficient attention
-            pipeline.enable_model_cpu_offload()
-            # Enable VAE slicing if available (not all pipelines support this)
-            if hasattr(pipeline, 'enable_vae_slicing'):
-                pipeline.enable_vae_slicing()
-            # Enable attention slicing for memory efficiency
-            if hasattr(pipeline, 'enable_attention_slicing'):
-                pipeline.enable_attention_slicing()
+        pipeline = pipeline.to(device)
+        # Enable memory efficient attention
+        pipeline.enable_model_cpu_offload()
+        # Enable VAE slicing if available (not all pipelines support this)
+        if hasattr(pipeline, 'enable_vae_slicing'):
+            pipeline.enable_vae_slicing()
+        # Enable attention slicing for memory efficiency
+        if hasattr(pipeline, 'enable_attention_slicing'):
+            pipeline.enable_attention_slicing()
         
-        logger.info("AI pipeline initialized successfully!")
+        logger.info("Stable Video Diffusion pipeline initialized successfully on GPU!")
         return True
         
     except Exception as e:
