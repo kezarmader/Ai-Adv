@@ -134,9 +134,6 @@ def initialize_ai_pipeline():
         # Enable attention slicing for memory efficiency
         if hasattr(pipeline, 'enable_attention_slicing'):
             pipeline.enable_attention_slicing()
-        # Enable memory efficient attention if available
-        if hasattr(pipeline, 'enable_xformers_memory_efficient_attention'):
-            pipeline.enable_xformers_memory_efficient_attention()
         # Set low VRAM mode
         if hasattr(pipeline, 'enable_sequential_cpu_offload'):
             pipeline.enable_sequential_cpu_offload()
