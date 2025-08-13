@@ -1,6 +1,6 @@
-# Use CUDA 12.9 runtime to match host CUDA version (nvidia-smi shows CUDA 12.9)
-# This avoids the "Error 804: forward compatibility" issue
-FROM nvidia/cuda:12.9-runtime-ubuntu22.04
+# Use CUDA 12.6 runtime - latest stable available that works with RTX 5090
+# Host has CUDA 12.9 but we need compatible Docker image that actually exists
+FROM nvidia/cuda:12.6.2-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -27,11 +27,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install PyTorch with CUDA 12.9 support to match host CUDA version
-# Using cu129 wheels to match nvidia-smi CUDA Version: 12.9
-# This should resolve the "forward compatibility" error
+# Install PyTorch with latest CUDA support that works with RTX 5090
+# Using latest available PyTorch with CUDA support for RTX 5090 Blackwell architecture
 RUN pip install --upgrade pip && \
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu129
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # Copy requirements and install other dependencies (excluding torch)
 COPY requirements.txt .
