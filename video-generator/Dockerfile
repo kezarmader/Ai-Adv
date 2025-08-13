@@ -1,11 +1,12 @@
-# Use NVIDIA CUDA runtime for GPU support - RTX 5090 optimized
-FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04
+# Use NVIDIA CUDA 12.8+ runtime for RTX 5090 Blackwell architecture support
+FROM nvidia/cuda:12.8-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Critical RTX 5090 support - Blackwell architecture (sm_120) + Hopper (sm_90) + Ada Lovelace (sm_89)
+# RTX 5090 Blackwell architecture requires CUDA 12.8+ (confirmed by PyTorch maintainers)
+# See: https://github.com/pytorch/pytorch/issues/151448 and #159207
 ENV TORCH_CUDA_ARCH_LIST="8.9;9.0;12.0"
 
 # Install system dependencies for AI models
@@ -25,9 +26,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Upgrade pip and install latest PyTorch with RTX 5090 support (sm_120)
+# Install PyTorch 2.7+ with CUDA 12.8+ - REQUIRED for RTX 5090 sm_120 support
+# Official fix per PyTorch maintainer @malfet: CUDA-12.1 do not support 5090, use 12.8+
 RUN pip install --upgrade pip && \
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    pip install torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==0.17.1+cu128 \
+    --index-url https://download.pytorch.org/whl/cu128
 
 # Copy requirements and install other dependencies (excluding torch)
 COPY requirements.txt .
@@ -44,9 +47,8 @@ RUN mkdir -p /app/videos && chmod 755 /app/videos
 # Copy application code
 COPY . .
 
-# RTX 5090 debugging flags for troubleshooting
-ENV CUDA_LAUNCH_BLOCKING=1
-ENV TORCH_USE_CUDA_DSA=1
+# Remove debugging flags - RTX 5090 issue is resolved with proper CUDA 12.8+ version
+# These were causing performance issues and are no longer needed
 
 # Expose port
 EXPOSE 5003
