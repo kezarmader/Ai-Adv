@@ -43,6 +43,7 @@ services:
 
   video-generator:
     build: ./video-generator
+    runtime: nvidia
     environment:
       NVIDIA_VISIBLE_DEVICES: "0"        # Use RTX 5090
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
@@ -67,9 +68,7 @@ services:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+            - capabilities: [gpu]
         limits:
           # Conservative memory limit for shared environment
           memory: 16G
