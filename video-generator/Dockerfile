@@ -1,27 +1,18 @@
-# Use CUDA 12.8 runtime for RTX 5090 compatibility (sm_120 support)
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+# Use CUDA 12.3.2 runtime (same as working image-generator)
+FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# RTX 5090 Blackwell architecture sm_120 support
-ENV TORCH_CUDA_ARCH_LIST="8.9;9.0;12.0"
+# RTX 5090 Blackwell architecture sm_120 support (same as image-generator)
+ENV TORCH_CUDA_ARCH_LIST="8.9;9.0"
 
-# Install system dependencies for AI models
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-dev \
-    python-is-python3 \
-    ffmpeg \
-    git \
-    wget \
-    curl \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libgomp1 \
-    && apt clean && rm -rf /var/lib/apt/lists/*
+# Install system dependencies
+RUN apt update && apt install -y \
+    python3 python3-pip python-is-python3 \
+    git wget curl libgl1 libglib2.0-0 && \
+    apt clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -34,9 +25,6 @@ COPY requirements.txt .
 RUN grep -v 'torch' requirements.txt > temp_requirements.txt && \
     pip install -r temp_requirements.txt --no-cache-dir
 
-# Install xformers separately to ensure CUDA compatibility
-RUN pip install --pre xformers --index-url https://download.pytorch.org/whl/nightly/cu128
-
 # Setup HuggingFace cache for AI models (match docker-compose volume)
 ENV HF_HOME=/app/.cache/huggingface
 RUN mkdir -p $HF_HOME
@@ -47,8 +35,9 @@ RUN mkdir -p /app/videos && chmod 755 /app/videos
 # Copy application code
 COPY . .
 
-# Remove old debugging flags and set RTX 5090 optimizations
-# Using PyTorch 2.8.0 with CUDA 12.8 to support RTX 5090 sm_120 architecture
+# Optional debugging flags (same as working image-generator)
+ENV CUDA_LAUNCH_BLOCKING=1
+ENV TORCH_USE_CUDA_DSA=1
 
 # Expose port
 EXPOSE 5003
