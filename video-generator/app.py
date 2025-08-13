@@ -126,7 +126,7 @@ def initialize_ai_pipeline():
         )
         
         pipeline = pipeline.to(device)
-        # Enable memory efficient attention
+        # Enable aggressive memory optimizations for shared GPU environment
         pipeline.enable_model_cpu_offload()
         # Enable VAE slicing if available (not all pipelines support this)
         if hasattr(pipeline, 'enable_vae_slicing'):
@@ -134,6 +134,20 @@ def initialize_ai_pipeline():
         # Enable attention slicing for memory efficiency
         if hasattr(pipeline, 'enable_attention_slicing'):
             pipeline.enable_attention_slicing()
+        # Enable memory efficient attention if available
+        if hasattr(pipeline, 'enable_xformers_memory_efficient_attention'):
+            pipeline.enable_xformers_memory_efficient_attention()
+        # Set low VRAM mode
+        if hasattr(pipeline, 'enable_sequential_cpu_offload'):
+            pipeline.enable_sequential_cpu_offload()
+            
+        # Clear any cached memory
+        torch.cuda.empty_cache()
+        
+        # Log memory usage
+        memory_allocated = torch.cuda.memory_allocated(0) / (1024**3)
+        memory_reserved = torch.cuda.memory_reserved(0) / (1024**3)
+        logger.info(f"GPU Memory - Allocated: {memory_allocated:.2f}GB, Reserved: {memory_reserved:.2f}GB")
         
         logger.info("Stable Video Diffusion pipeline initialized successfully on GPU!")
         return True
@@ -225,15 +239,21 @@ def create_video_with_ai(image: Image.Image, scene: str, data: VideoPrompt) -> s
         # Generate video frames using SVD
         generator = torch.manual_seed(42)  # For reproducible results
         
+        # Clear GPU cache before generation
+        torch.cuda.empty_cache()
+        
         with TimingContext("ai_video_generation", logger):
             frames = pipeline(
                 image,
-                decode_chunk_size=8,  # Memory optimization
+                decode_chunk_size=4,  # Reduced for memory efficiency
                 generator=generator,
                 motion_bucket_id=data.motion_bucket_id,
                 noise_aug_strength=data.noise_aug_strength,
                 num_frames=data.num_frames,
             ).frames[0]
+        
+        # Clear GPU cache after generation
+        torch.cuda.empty_cache()
         
         # Export frames to video
         with TimingContext("video_export", logger):

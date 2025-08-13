@@ -48,14 +48,14 @@ services:
       NVIDIA_VISIBLE_DEVICES: "0"        # Use RTX 5090
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       # PyTorch memory optimization for shared GPU environment
-      PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:256,expandable_segments:True
+      PYTORCH_CUDA_ALLOC_CONF: "max_split_size_mb:128,expandable_segments:True,garbage_collection_threshold:0.8"
       # HuggingFace cache directory
       HF_HOME: /app/.cache/huggingface
       # RTX 5090 optimizations (CUDA 12.9 + driver 575.51.03)
       CUDA_VISIBLE_DEVICES: "0"
       TORCH_CUDA_ARCH_LIST: "8.9;9.0;12.0"   # RTX 5090 Blackwell (sm_120) + Hopper + Ada Lovelace
-      # Limit memory for shared GPU (LLM: 8GB, Image: 10GB, Video: 12GB remaining)
-      PYTORCH_CUDA_MEMORY_FRACTION: "0.4"  # Use max 40% of GPU memory (~13GB)
+      # Aggressive memory management for shared GPU
+      PYTORCH_CUDA_MEMORY_FRACTION: "0.5"  # Use max 50% of GPU memory (~15GB)
       CUDA_LAUNCH_BLOCKING: "0"  # Enable for performance
     volumes:
       # Cache AI models to avoid re-downloading
