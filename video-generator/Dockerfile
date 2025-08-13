@@ -25,9 +25,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Upgrade pip and install nightly PyTorch with CUDA 12.8 (critical for RTX 5090)
+# Upgrade pip and install stable PyTorch with CUDA 12.4 (RTX 5090 compatible)
 RUN pip install --upgrade pip && \
-    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    pip install torch==2.4.0+cu124 torchvision==0.19.0+cu124 torchaudio==2.4.0+cu124 --index-url https://download.pytorch.org/whl/cu124
 
 # Copy requirements and install other dependencies (excluding torch)
 COPY requirements.txt .
