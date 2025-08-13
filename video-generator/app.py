@@ -465,11 +465,18 @@ def health_check():
 @app.get("/models/info")
 def get_model_info():
     """Get information about loaded AI models"""
+    gpu_memory_total = torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else 0
+    gpu_memory_allocated = torch.cuda.memory_allocated() if torch.cuda.is_available() else 0
+    gpu_memory_cached = torch.cuda.memory_reserved() if torch.cuda.is_available() else 0
+    
     return {
         "pipeline_loaded": pipeline is not None,
         "model_id": MODEL_ID if pipeline is not None else None,
         "device": "cuda" if torch.cuda.is_available() and pipeline is not None else "cpu",
         "cuda_available": torch.cuda.is_available(),
-        "gpu_memory_allocated": torch.cuda.memory_allocated() if torch.cuda.is_available() else 0,
-        "gpu_memory_cached": torch.cuda.memory_reserved() if torch.cuda.is_available() else 0
+        "gpu_memory_total_gb": round(gpu_memory_total / 1024**3, 2),
+        "gpu_memory_allocated_gb": round(gpu_memory_allocated / 1024**3, 2),
+        "gpu_memory_cached_gb": round(gpu_memory_cached / 1024**3, 2),
+        "gpu_memory_free_gb": round((gpu_memory_total - gpu_memory_cached) / 1024**3, 2),
+        "gpu_utilization_percent": round((gpu_memory_cached / gpu_memory_total * 100), 1) if gpu_memory_total > 0 else 0
     }

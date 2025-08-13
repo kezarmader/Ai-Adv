@@ -1,13 +1,13 @@
-# Use latest NVIDIA CUDA runtime that supports RTX 5090 Blackwell architecture
-# Using CUDA 13.0.0 as it's the latest available with RTX 5090 support
-FROM nvidia/cuda:13.0.0-runtime-ubuntu22.04
+# Use CUDA 12.9 runtime to match host CUDA version (nvidia-smi shows CUDA 12.9)
+# This avoids the "Error 804: forward compatibility" issue
+FROM nvidia/cuda:12.9-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 # RTX 5090 Blackwell architecture requires CUDA 12.8+ (confirmed by PyTorch maintainers)
-# See: https://github.com/pytorch/pytorch/issues/151448 and #159207
+# Host has CUDA 12.9 with driver 575.51.03 which supports RTX 5090
 ENV TORCH_CUDA_ARCH_LIST="8.9;9.0;12.0"
 
 # Install system dependencies for AI models
@@ -27,12 +27,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install PyTorch with CUDA 13.0+ support for RTX 5090 Blackwell architecture
-# Using cu128 wheels as they're compatible with CUDA 13.0 and support sm_120
-# Official fix per PyTorch maintainer @malfet: CUDA-12.1 do not support 5090, use 12.8+
+# Install PyTorch with CUDA 12.9 support to match host CUDA version
+# Using cu129 wheels to match nvidia-smi CUDA Version: 12.9
+# This should resolve the "forward compatibility" error
 RUN pip install --upgrade pip && \
-    pip install torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
-    --index-url https://download.pytorch.org/whl/cu128
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu129
 
 # Copy requirements and install other dependencies (excluding torch)
 COPY requirements.txt .
