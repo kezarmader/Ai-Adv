@@ -31,7 +31,7 @@ WORKDIR /app
 # Using cu128 wheels as they're compatible with CUDA 13.0 and support sm_120
 # Official fix per PyTorch maintainer @malfet: CUDA-12.1 do not support 5090, use 12.8+
 RUN pip install --upgrade pip && \
-    pip install torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==0.17.1+cu128 \
+    pip install torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
     --index-url https://download.pytorch.org/whl/cu128
 
 # Copy requirements and install other dependencies (excluding torch)
