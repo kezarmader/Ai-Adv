@@ -46,7 +46,7 @@ services:
     runtime: nvidia
     environment:
       NVIDIA_VISIBLE_DEVICES: "0"        # Use RTX 5090
-      # NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       # PyTorch memory optimization for shared GPU environment
       PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:256,expandable_segments:True
       # HuggingFace cache directory
