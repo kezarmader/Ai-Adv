@@ -34,6 +34,9 @@ COPY requirements.txt .
 RUN grep -v 'torch' requirements.txt > temp_requirements.txt && \
     pip install -r temp_requirements.txt --no-cache-dir
 
+# Install xformers separately to ensure CUDA compatibility
+RUN pip install xformers==0.0.25 --no-deps --force-reinstall
+
 # Setup HuggingFace cache for AI models (match docker-compose volume)
 ENV HF_HOME=/app/.cache/huggingface
 RUN mkdir -p $HF_HOME
