@@ -52,7 +52,9 @@ services:
       HF_HOME: /app/.cache/huggingface
       # Additional GPU optimizations
       CUDA_VISIBLE_DEVICES: "0"
-      TORCH_CUDA_ARCH_LIST: "8.9;9.0"   # RTX 5090 Blackwell + Ada Lovelace architecture
+      TORCH_CUDA_ARCH_LIST: "8.9;9.0;12.0"   # RTX 5090 Blackwell (sm_120) + Hopper + Ada Lovelace
+      # Enable debugging for RTX 5090 compatibility
+      CUDA_LAUNCH_BLOCKING: "1"
     volumes:
       # Cache AI models to avoid re-downloading
       - video_models:/app/.cache/huggingface

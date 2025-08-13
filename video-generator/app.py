@@ -60,11 +60,31 @@ app.add_middleware(LoggingMiddleware)
 MODEL_ID = "stabilityai/stable-video-diffusion-img2vid-xt"
 pipeline = None
 
-# Log service startup
+# Log service startup with detailed GPU information
+cuda_available = torch.cuda.is_available()
+gpu_count = torch.cuda.device_count() if cuda_available else 0
+
 logger.info("Video generator service starting up", extra={
-    "cuda_available": torch.cuda.is_available(),
-    "gpu_count": torch.cuda.device_count() if torch.cuda.is_available() else 0
+    "cuda_available": cuda_available,
+    "gpu_count": gpu_count
 })
+
+# Additional debugging for RTX 5090
+if cuda_available:
+    for i in range(gpu_count):
+        gpu_name = torch.cuda.get_device_name(i)
+        gpu_capability = torch.cuda.get_device_capability(i)
+        gpu_memory = torch.cuda.get_device_properties(i).total_memory // (1024**3)  # GB
+        logger.info(f"GPU {i} detected", extra={
+            "gpu_name": gpu_name,
+            "compute_capability": f"sm_{gpu_capability[0]}{gpu_capability[1]}",
+            "memory_gb": gpu_memory
+        })
+else:
+    logger.warning("CUDA not available - RTX 5090 not detected", extra={
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda if hasattr(torch.version, 'cuda') else "unknown"
+    })
 
 # Create videos directory if it doesn't exist
 VIDEOS_DIR = "/app/videos"
