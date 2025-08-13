@@ -1,5 +1,6 @@
-# Use NVIDIA CUDA 12.8+ runtime for RTX 5090 Blackwell architecture support
-FROM nvidia/cuda:12.8-runtime-ubuntu22.04
+# Use latest NVIDIA CUDA runtime that supports RTX 5090 Blackwell architecture
+# Using CUDA 13.0.0 as it's the latest available with RTX 5090 support
+FROM nvidia/cuda:13.0.0-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -26,7 +27,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install PyTorch 2.7+ with CUDA 12.8+ - REQUIRED for RTX 5090 sm_120 support
+# Install PyTorch with CUDA 13.0+ support for RTX 5090 Blackwell architecture
+# Using cu128 wheels as they're compatible with CUDA 13.0 and support sm_120
 # Official fix per PyTorch maintainer @malfet: CUDA-12.1 do not support 5090, use 12.8+
 RUN pip install --upgrade pip && \
     pip install torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==0.17.1+cu128 \
