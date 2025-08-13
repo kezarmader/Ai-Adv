@@ -5,8 +5,8 @@ FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Critical RTX 5090 support - Blackwell architecture (sm_90) + Ada Lovelace (sm_89)
-ENV TORCH_CUDA_ARCH_LIST="8.9;9.0"
+# Critical RTX 5090 support - Blackwell architecture (sm_120) + Hopper (sm_90) + Ada Lovelace (sm_89)
+ENV TORCH_CUDA_ARCH_LIST="8.9;9.0;12.0"
 
 # Install system dependencies for AI models
 RUN apt-get update && apt-get install -y \
@@ -25,9 +25,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Upgrade pip and install nightly PyTorch with CUDA 12.8 (supports sm_90)
+# Upgrade pip and install latest PyTorch with RTX 5090 support (sm_120)
 RUN pip install --upgrade pip && \
-    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # Copy requirements and install other dependencies (excluding torch)
 COPY requirements.txt .

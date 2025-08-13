@@ -99,7 +99,12 @@ def initialize_ai_pipeline():
             pipeline = pipeline.to(device)
             # Enable memory efficient attention
             pipeline.enable_model_cpu_offload()
-            pipeline.enable_vae_slicing()
+            # Enable VAE slicing if available (not all pipelines support this)
+            if hasattr(pipeline, 'enable_vae_slicing'):
+                pipeline.enable_vae_slicing()
+            # Enable attention slicing for memory efficiency
+            if hasattr(pipeline, 'enable_attention_slicing'):
+                pipeline.enable_attention_slicing()
         
         logger.info("AI pipeline initialized successfully!")
         return True
