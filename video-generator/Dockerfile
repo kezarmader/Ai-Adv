@@ -1,13 +1,11 @@
-# Use CUDA 12.6 runtime - latest stable available that works with RTX 5090
-# Host has CUDA 12.9 but we need compatible Docker image that actually exists
-FROM nvidia/cuda:12.6.2-runtime-ubuntu22.04
+# Use CUDA 12.8 runtime for RTX 5090 compatibility (sm_120 support)
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# RTX 5090 Blackwell architecture requires CUDA 12.8+ (confirmed by PyTorch maintainers)
-# Host has CUDA 12.9 with driver 575.51.03 which supports RTX 5090
+# RTX 5090 Blackwell architecture sm_120 support
 ENV TORCH_CUDA_ARCH_LIST="8.9;9.0;12.0"
 
 # Install system dependencies for AI models
@@ -27,10 +25,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install PyTorch with latest CUDA support that works with RTX 5090
-# Using latest available PyTorch with CUDA support for RTX 5090 Blackwell architecture
+# Install PyTorch 2.8.0 with CUDA 12.8 support for RTX 5090 sm_120
 RUN pip install --upgrade pip && \
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # Copy requirements and install other dependencies (excluding torch)
 COPY requirements.txt .
@@ -47,8 +44,8 @@ RUN mkdir -p /app/videos && chmod 755 /app/videos
 # Copy application code
 COPY . .
 
-# Remove debugging flags - RTX 5090 issue is resolved with proper CUDA 12.8+ version
-# These were causing performance issues and are no longer needed
+# Remove old debugging flags and set RTX 5090 optimizations
+# Using PyTorch 2.8.0 with CUDA 12.8 to support RTX 5090 sm_120 architecture
 
 # Expose port
 EXPOSE 5003
