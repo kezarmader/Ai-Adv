@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
-import torch, uuid, os, time, threading, requests
+import torch, uuid, os, time, threading, requests, traceback
 from PIL import Image
 import numpy as np
 from logging_config import setup_logging, TimingContext, generate_request_id, request_id
@@ -506,3 +506,57 @@ def get_model_info():
         "gpu_memory_free_gb": round((gpu_memory_total - gpu_memory_cached) / 1024**3, 2),
         "gpu_utilization_percent": round((gpu_memory_cached / gpu_memory_total * 100), 1) if gpu_memory_total > 0 else 0
     }
+
+@app.post("/test-local")
+def test_local_video_generation(data: VideoPrompt):
+    """Test video generation with local image file (for testing only)"""
+    timer = None
+    method_used = "local_file_test"
+    
+    try:
+        with TimingContext("video_generation_test", logger) as timer:
+            logger.info("Test video generation request received", extra={
+                "image_filename": data.image_filename,
+                "scene_length": len(data.scene),
+                "num_frames": data.num_frames
+            })
+            
+            # Load local image directly instead of downloading
+            local_image_path = f"/app/{data.image_filename}"
+            if not os.path.exists(local_image_path):
+                raise HTTPException(status_code=404, detail=f"Local image not found: {local_image_path}")
+            
+            image = Image.open(local_image_path).convert('RGB')
+            image = image.resize((1024, 576), Image.Resampling.LANCZOS)
+            
+            logger.info("Local image loaded successfully", extra={
+                "image_path": local_image_path,
+                "image_size": image.size
+            })
+            
+            # Generate video using AI
+            video_filename = create_video_with_ai(image, data.scene, data)
+            method_used = "ai_video_generation"
+            
+            logger.info("Test video generated successfully", extra={
+                "video_filename": video_filename,
+                "method": method_used
+            })
+            
+            return {
+                "status": "success",
+                "video_filename": video_filename,
+                "video_url": f"/videos/{video_filename}",
+                "method": method_used,
+                "generation_time_ms": timer.elapsed_ms if timer else 0
+            }
+            
+    except Exception as e:
+        logger.error("Test video generation failed", extra={
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "method_attempted": method_used,
+            "duration_ms": timer.elapsed_ms if timer else 0,
+            "traceback": traceback.format_exc()
+        })
+        raise HTTPException(status_code=500, detail=f"Test video generation failed: {str(e)}")
