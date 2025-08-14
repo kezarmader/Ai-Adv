@@ -9,4 +9,5 @@ pillow==10.3.0
 numpy==1.26.4
 requests==2.31.0
 huggingface-hub==0.23.1
+opencv-python==4.9.0.80
 # Note: PyTorch nightly+cu128 and xformers are installed separately in Dockerfile for RTX 5090 compatibility
