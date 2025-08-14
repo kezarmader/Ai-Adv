@@ -51,6 +51,8 @@ services:
     volumes:
       - video_models:/app/.cache/huggingface
     networks: [app-net]
+    ports:
+      - "5003:5003"  # Temporary for testing
     expose:
       - "5003"
     restart: unless-stopped
