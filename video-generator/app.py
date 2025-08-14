@@ -118,7 +118,7 @@ def initialize_ai_pipeline():
         gpu_memory = torch.cuda.get_device_properties(0).total_memory // (1024**3)
         logger.info(f"GPU detected: {gpu_name}, Memory: {gpu_memory}GB")
         
-        # Load the pipeline
+        # Load the pipeline with simplified configuration to avoid meta tensor issues
         pipeline = StableVideoDiffusionPipeline.from_pretrained(
             MODEL_ID, 
             torch_dtype=torch.float16,
@@ -126,20 +126,22 @@ def initialize_ai_pipeline():
         )
         
         pipeline = pipeline.to(device)
-        # Enable aggressive memory optimizations for shared GPU environment
-        pipeline.enable_model_cpu_offload()
-        # Enable VAE slicing if available (not all pipelines support this)
+        
+        # Enable memory optimizations for shared GPU environment
+        pipeline.enable_model_cpu_offload()  # Most important for shared GPU
+        
+        # Enable VAE slicing if available
         if hasattr(pipeline, 'enable_vae_slicing'):
             pipeline.enable_vae_slicing()
+        
         # Enable attention slicing for memory efficiency
         if hasattr(pipeline, 'enable_attention_slicing'):
             pipeline.enable_attention_slicing()
-        # Set low VRAM mode
-        if hasattr(pipeline, 'enable_sequential_cpu_offload'):
-            pipeline.enable_sequential_cpu_offload()
-            
-        # Clear any cached memory
+        
+        # Clear cache after initialization
         torch.cuda.empty_cache()
+        import gc
+        gc.collect()
         
         # Log memory usage
         memory_allocated = torch.cuda.memory_allocated(0) / (1024**3)
@@ -548,7 +550,7 @@ def test_local_video_generation(data: VideoPrompt):
                 "video_filename": video_filename,
                 "video_url": f"/videos/{video_filename}",
                 "method": method_used,
-                "generation_time_ms": timer.elapsed_ms if timer else 0
+                "generation_time_ms": timer.duration_ms if timer else 0
             }
             
     except Exception as e:
@@ -556,7 +558,7 @@ def test_local_video_generation(data: VideoPrompt):
             "error": str(e),
             "error_type": type(e).__name__,
             "method_attempted": method_used,
-            "duration_ms": timer.elapsed_ms if timer else 0,
+            "duration_ms": timer.duration_ms if timer else 0,
             "traceback": traceback.format_exc()
         })
         raise HTTPException(status_code=500, detail=f"Test video generation failed: {str(e)}")
