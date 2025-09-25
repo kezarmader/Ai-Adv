@@ -46,12 +46,37 @@ services:
     expose:
       - "5002"
 
+  video-generator:
+    build: ./video-generator
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0"
+      PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:128
+    networks: [app-net]
+    expose:
+      - "5003"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+  asin-extractor:
+    build: ./asin-extractor
+    networks: [app-net]
+    expose:
+      - "5004"
+    restart: unless-stopped
+
   orchestrator:
     build: ./orchestrator
     depends_on:
       - llm-service
       - image-generator
       - poster-service
+      - video-generator
+      - asin-extractor
     networks: [app-net]
     ports:
       - "8000:8000"

@@ -1,0 +1,16 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pillow==10.1.0
+opencv-python==4.8.1.78
+numpy==1.25.2
+imageio[ffmpeg]==2.33.1
+requests==2.31.0
+python-multipart==0.0.6
+torch>=2.0.0,<2.2.0
+torchvision>=0.15.0,<0.17.0
+diffusers==0.25.0
+transformers==4.36.0
+huggingface_hub<1.0.0
+accelerate==0.25.0
+xformers>=0.0.20

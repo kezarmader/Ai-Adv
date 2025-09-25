@@ -18,12 +18,21 @@ A microservices-based AI application that generates product advertisements using
 
 ## 🏗️ Architecture
 
-The application consists of 4 microservices:
+The application consists of 6 microservices with **ASIN-based workflow**:
 
-- **Orchestrator** (Port 8000): Main API that coordinates the entire ad generation workflow and provides image download proxy
-- **LLM Service** (Port 11434): Ollama service running Llama3 for text generation
-- **Image Generator** (Port 5001): Stable Diffusion XL service for creating product images with temporary storage
+- **Orchestrator** (Port 8000): Main API that coordinates the entire ad generation workflow and provides download proxies
+- **ASIN Extractor** (Port 5004): **NEW** - Extracts Amazon product information from ASIN codes
+- **LLM Service** (Port 11434): Ollama service running Llama3 for enhanced text generation with product context
+- **Image Generator** (Port 5001): Stable Diffusion XL service for creating AI-enhanced product images
+- **Video Generator** (Port 5003): AI-powered video generation with content-aware animation from static images
 - **Poster Service** (Port 5002): Mock service for posting/publishing generated ads
+
+### 🔄 ASIN-Based Workflow (5 Steps)
+1. **ASIN Input**: Orchestrator receives Amazon ASIN code
+2. **Product Extraction**: ASIN Extractor scrapes Amazon product details, features, and images
+3. **LLM Enhancement**: Llama3 refines product descriptions with enhanced marketing copy
+4. **AI Image Generation**: Stable Diffusion creates professional product images
+5. **AI Video Creation**: Advanced video generator creates dynamic animations from static images
 
 ## ⚠️ Privacy & Data Disclaimer
 
@@ -105,84 +114,134 @@ docker-compose logs image-generator
 
 You should see:
 - ✅ Orchestrator: `http://localhost:8000`
+- ✅ ASIN Extractor: `http://localhost:5004` (**NEW**)
 - ✅ LLM Service: `http://localhost:11434`
 - ✅ Image Generator: `http://localhost:5001`
+- ✅ Video Generator: `http://localhost:5003`
 - ✅ Poster Service: `http://localhost:5002`
 
 ## 📝 Usage
 
-### Generate an Advertisement
+### Generate ASIN-Based Advertisement
 
-Send a POST request to the orchestrator with the following fields:
+Send a POST request to the orchestrator with Amazon ASIN for automatic product analysis:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `product` | string | Yes | Name/description of the product |
-| `audience` | string | Yes | Target audience for the ad |
-| `tone` | string | Yes | Desired tone (e.g., "professional", "energetic", "friendly") |
-| `ASIN` | string | Yes | Amazon product ID (for reference) |
-| `brand_text` | string | Yes | Brand name to display on image |
-| `cta_text` | string | Yes | Call-to-action text for the image |
+| `asin` | string | Yes | Amazon ASIN code (e.g., "B08N5WRWNW") |
+| `generate_video` | boolean | No | Set to `true` to also generate AI-enhanced animated video |
+| `video_animation` | string | No | Animation type: `zoom_pan`, `ken_burns`, `parallax`, `fade_effects`, `ai_enhanced` |
+| `video_duration` | integer | No | Video duration in seconds (1-30, default: 5) |
+| `video_style` | string | No | Animation style: `smooth`, `dramatic`, `gentle`, `energetic`, `dynamic` |
 
-**Example using curl:**
+**🎯 ASIN-Based Workflow Benefits:**
+- **Automatic Product Analysis**: Extracts title, brand, features, and images from Amazon
+- **AI-Enhanced Descriptions**: LLM creates compelling marketing copy from product data
+- **Content-Aware Generation**: Images and videos tailored to actual product characteristics
+- **Single GPU Optimization**: All AI models share RTX 5090 GPU efficiently
+
+**Example using curl (ASIN-based with image only):**
 ```powershell
-# Using curl (if available)
+# Basic ASIN-based advertisement generation
 curl -X POST "http://localhost:8000/run" `
   -H "Content-Type: application/json" `
   -d '{
-    "product": "Wireless Bluetooth Headphones",
-    "audience": "fitness enthusiasts",
-    "tone": "energetic and motivating",
-    "ASIN": "B08N5WRWNW",
-    "brand_text": "SoundFit Pro",
-    "cta_text": "Get Yours Today!"
+    "asin": "B08N5WRWNW"
+  }'
+```
+
+**Example with AI-enhanced video generation:**
+```powershell
+# Full ASIN workflow with AI-powered video
+curl -X POST "http://localhost:8000/run" `
+  -H "Content-Type: application/json" `
+  -d '{
+    "asin": "B08N5WRWNW",
+    "generate_video": true,
+    "video_animation": "ai_enhanced",
+    "video_duration": 8,
+    "video_style": "dynamic"
   }'
 ```
 
 **Example using PowerShell:**
 ```powershell
+# Simple ASIN-based generation
 $body = @{
-    product = "Wireless Bluetooth Headphones"
-    audience = "fitness enthusiasts"
-    tone = "energetic and motivating"
-    ASIN = "B08N5WRWNW"
-    brand_text = "SoundFit Pro"
-    cta_text = "Get Yours Today!"
+    asin = "B08N5WRWNW"
 } | ConvertTo-Json
 
 Invoke-RestMethod -Uri "http://localhost:8000/run" -Method Post -Body $body -ContentType "application/json"
+
+# With AI-enhanced video
+$bodyWithVideo = @{
+    asin = "B08N5WRWNW"
+    generate_video = $true
+    video_animation = "ai_enhanced"
+    video_duration = 10
+    video_style = "dynamic"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/run" -Method Post -Body $bodyWithVideo -ContentType "application/json"
 ```
 
 ### Expected Response
 The API will return a JSON object containing:
 - **ad_text**: Complete generated advertisement with product details, features, and scene description
-- **image_url**: Download URL for the generated product image (valid for 10 minutes)  
+- **image_url**: Download URL for the generated product image (valid for 10 minutes)
+- **video_url**: Download URL for the generated video (if requested, valid for 15 minutes)
 - **post_status**: Status from the mock posting service
 
-Example response:
+Example ASIN-based response (with AI-enhanced video):
 ```json
 {
   "ad_text": {
-    "product": "Wireless Bluetooth Headphones",
-    "audience": ["fitness enthusiasts"],
-    "tone": "energetic and motivating",
-    "description": "Unleash your potential with SoundFit Pro Wireless Bluetooth Headphones...",
-    "features": ["Crystal Clear Audio", "30-Hour Battery", "Sweat Resistant"],
-    "scene": "A fitness enthusiast wearing headphones during an intense workout session"
+    "product": "Echo Dot (5th Gen, 2022 release) | Smart speaker with bigger vibrant sound",
+    "enhanced_description": "Transform your space with Amazon's most advanced Echo Dot featuring premium sound technology...",
+    "features": ["Improved bass and clearer vocals", "Built-in Eero wifi", "Temperature sensor", "Alexa voice control"],
+    "scene": "A modern living room showcasing the Echo Dot with dynamic lighting and sound visualization",
+    "video_scene": "Dynamic zoom sequence highlighting the speaker's premium design with subtle particle effects and audio wave animations",
+    "suggested_brand_text": "Amazon Echo",
+    "suggested_cta": "Voice Control Everything!"
   },
   "image_url": "http://localhost:8000/download/a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
-  "post_status": {"status": "success", "message": "Advertisement posted successfully to mock platform"}
+  "video_url": "http://localhost:8000/download-video/b2c3d4e5-f6g7-8901-bcde-fg2345678901.mp4",
+  "post_status": {"status": "success", "message": "ASIN-based advertisement posted successfully"}
 }
 ```
 
-### Download Generated Images
-Images are temporarily stored and can be downloaded using the provided URL:
+### Download Generated Content
+Images and videos are temporarily stored and can be downloaded using the provided URLs:
 ```powershell
 # Download the generated image
 Invoke-WebRequest -Uri "http://localhost:8000/download/[filename].png" -OutFile "advertisement.png"
+
+# Download the generated video (if created)
+Invoke-WebRequest -Uri "http://localhost:8000/download-video/[filename].mp4" -OutFile "advertisement.mp4"
 ```
 
-**Note**: Generated images are automatically deleted after 10 minutes for security and storage management.
+**Note**: 
+- Generated images are automatically deleted after **10 minutes**
+- Generated videos are automatically deleted after **15 minutes**
+- Files are removed for security and storage management
+
+### Generate Video from Existing Image
+You can also create videos from existing images using the dedicated video endpoint:
+
+```powershell
+$body = @{
+    image_url = "http://localhost:8000/download/existing-image.png"
+    animation_type = "zoom_pan"
+    duration = 5
+    fps = 30
+    style = "smooth"
+    text_overlay = "Amazing Product"
+    brand_text = "YourBrand"
+    cta_text = "Buy Now!"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/generate-video" -Method Post -Body $body -ContentType "application/json"
+```
 
 ### Performance Expectations
 Typical response times (varies by hardware):
@@ -403,8 +462,10 @@ Once running, visit:
 - Poster Service API docs: http://localhost:5002/docs
 
 #### Key Endpoints
-- **POST /run**: Generate complete advertisement (copy + image)
+- **POST /run**: Generate complete advertisement (copy + image + optional video)
+- **POST /generate-video**: **NEW** - Generate video from existing image URL
 - **GET /download/{filename}**: Download generated images (expires in 10 minutes)
+- **GET /download-video/{filename}**: **NEW** - Download generated videos (expires in 15 minutes)
 
 ## � Quick Reference
 
@@ -428,8 +489,10 @@ docker-compose down -v && docker-compose up --build
 
 ### Service URLs
 - **Main API**: http://localhost:8000 (see /docs for API documentation)
+- **ASIN Extractor**: http://localhost:5004 (see /docs for product extraction)
 - **LLM Service**: http://localhost:11434 (Ollama)
 - **Image Generator**: http://localhost:5001 (see /docs)
+- **Video Generator**: http://localhost:5003 (see /docs)
 - **Poster Service**: http://localhost:5002 (see /docs)
 
 ### Important Files

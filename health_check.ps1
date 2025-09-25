@@ -11,6 +11,7 @@ param(
 $Services = @{
     "orchestrator" = "http://localhost:8000"
     "image-generator" = "http://localhost:5001"
+    "video-generator" = "http://localhost:5003"  # NEW
     "poster-service" = "http://localhost:5002"
     "llm-service" = "http://localhost:11434"
 }
@@ -87,6 +88,46 @@ function Test-AdGeneration {
     }
 }
 
+function Test-VideoGeneration {
+    # Use a placeholder image URL for testing
+    $testImageUrl = "https://via.placeholder.com/1024x1024/4CAF50/FFFFFF?text=TEST"
+    
+    $payload = @{
+        image_url = $testImageUrl
+        animation_type = "zoom_pan"
+        duration = 2  # Short duration for quick test
+        fps = 15      # Lower FPS for faster processing
+        style = "smooth"
+        brand_text = "TestBrand"
+    } | ConvertTo-Json
+
+    try {
+        Write-Host "🎬 Testing video generation..." -ForegroundColor Yellow
+        
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        
+        $response = Invoke-RestMethod -Uri "$($Services['video-generator'])/generate" -Method Post -Body $payload -ContentType "application/json" -TimeoutSec 30
+        
+        $stopwatch.Stop()
+        $duration = $stopwatch.Elapsed.TotalSeconds
+        
+        return @{
+            Status = "✅ Success"
+            Duration = "$([math]::Round($duration, 2))s"
+            FileSize = if ($response.file_size_mb) { "$($response.file_size_mb) MB" } else { "N/A" }
+            Animation = $response.animation_type
+            VideoFPS = $response.fps
+        }
+    }
+    catch {
+        return @{
+            Status = "❌ Failed"
+            Duration = if ($stopwatch) { "$([math]::Round($stopwatch.Elapsed.TotalSeconds, 2))s" } else { "N/A" }
+            Error = $_.Exception.Message.Substring(0, [Math]::Min(100, $_.Exception.Message.Length))
+        }
+    }
+}
+
 function Show-ServiceStatus {
     Write-Host "`n📊 Service Health Status:" -ForegroundColor Cyan
     Write-Host ("=" * 60) -ForegroundColor Gray
@@ -111,13 +152,28 @@ function Show-ServiceStatus {
 function Show-PipelineTest {
     Write-Host "`n🔄 Pipeline Test:" -ForegroundColor Cyan
     
-    $result = Test-AdGeneration
+    $adResult = Test-AdGeneration
     
-    foreach ($property in $result.GetEnumerator()) {
-        Write-Host "  $($property.Key): $($property.Value)"
+    Write-Host "  Ad Generation:" -ForegroundColor Yellow
+    foreach ($property in $adResult.GetEnumerator()) {
+        Write-Host "    $($property.Key): $($property.Value)"
     }
     
-    return $result
+    if ($Detailed) {
+        Write-Host "`n  Video Generation Test:" -ForegroundColor Yellow
+        $videoResult = Test-VideoGeneration
+        
+        foreach ($property in $videoResult.GetEnumerator()) {
+            Write-Host "    $($property.Key): $($property.Value)"
+        }
+        
+        return @{
+            AdGeneration = $adResult
+            VideoGeneration = $videoResult
+        }
+    }
+    
+    return @{ AdGeneration = $adResult }
 }
 
 function Show-LogSummary {
