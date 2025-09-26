@@ -115,7 +115,8 @@ class AIVideoAnimationEngine:
         """Analyze image content to determine optimal motion patterns"""
         try:
             if not self.clip_model or not self.clip_processor:
-                return {"motion_type": "zoom_pan", "intensity": 0.3}
+                logger.warning("CLIP model not available, using fallback analysis")
+                return self._fallback_image_analysis(image)
             
             # Process image with CLIP
             inputs = self.clip_processor(images=image, return_tensors="pt").to(self.device)
@@ -145,33 +146,66 @@ class AIVideoAnimationEngine:
             }
             
         except Exception as e:
-            logger.warning(f"AI motion analysis failed: {e}. Using default.")
-            return {"motion_type": "zoom_pan", "intensity": 0.3}
+            logger.warning(f"AI motion analysis failed: {e}. Using fallback.")
+            return self._fallback_image_analysis(image)
+    
+    def _fallback_image_analysis(self, image: Image.Image) -> dict:
+        """Fallback image analysis without CLIP model"""
+        import numpy as np
+        
+        # Convert to numpy array for analysis
+        img_array = np.array(image)
+        
+        # Simple image complexity analysis based on pixel variance
+        if len(img_array.shape) == 3:
+            # Color image - analyze color variance
+            color_variance = np.var(img_array, axis=(0, 1)).mean()
+            edge_variance = np.var(np.diff(img_array, axis=0)) + np.var(np.diff(img_array, axis=1))
+        else:
+            # Grayscale
+            color_variance = np.var(img_array)
+            edge_variance = np.var(np.diff(img_array, axis=0)) + np.var(np.diff(img_array, axis=1))
+        
+        # Normalize and determine motion type
+        complexity = min(1.0, (color_variance + edge_variance) / 10000)
+        
+        if complexity > 0.6:
+            return {"motion_type": "parallax", "intensity": 0.7, "complexity": complexity}
+        elif complexity > 0.3:
+            return {"motion_type": "ken_burns", "intensity": 0.5, "complexity": complexity}
+        else:
+            return {"motion_type": "zoom_pan", "intensity": 0.4, "complexity": complexity}
     
     def create_ai_enhanced_animation(self, image: Image.Image, duration: int, fps: int, 
                                    style: str = "smooth", motion_analysis: dict = None) -> List[np.ndarray]:
         """Create AI-enhanced animation based on image content analysis"""
         
-        if not motion_analysis:
-            motion_analysis = self.analyze_image_for_motion(image)
-        
-        logger.info("Creating AI-enhanced animation", extra={
-            "motion_type": motion_analysis.get("motion_type"),
-            "intensity": motion_analysis.get("intensity"),
-            "complexity": motion_analysis.get("complexity")
-        })
-        
-        # Use the determined motion type with AI-enhanced parameters
-        animation_type = motion_analysis.get("motion_type", "zoom_pan")
-        intensity = motion_analysis.get("intensity", 0.3)
-        
-        # Enhance the basic animation engine with AI insights
-        if animation_type == "parallax":
-            return self._create_ai_parallax(image, duration, fps, style, intensity)
-        elif animation_type == "ken_burns":
-            return self._create_ai_ken_burns(image, duration, fps, style, intensity)
-        else:
-            return self._create_ai_zoom_pan(image, duration, fps, style, intensity)
+        try:
+            if not motion_analysis:
+                motion_analysis = self.analyze_image_for_motion(image)
+            
+            logger.info("Creating AI-enhanced animation", extra={
+                "motion_type": motion_analysis.get("motion_type"),
+                "intensity": motion_analysis.get("intensity"),
+                "complexity": motion_analysis.get("complexity")
+            })
+            
+            # Use the determined motion type with AI-enhanced parameters
+            animation_type = motion_analysis.get("motion_type", "zoom_pan")
+            intensity = motion_analysis.get("intensity", 0.3)
+            
+            # Enhance the basic animation engine with AI insights
+            if animation_type == "parallax":
+                return self._create_ai_parallax(image, duration, fps, style, intensity)
+            elif animation_type == "ken_burns":
+                return self._create_ai_ken_burns(image, duration, fps, style, intensity)
+            else:
+                return self._create_ai_zoom_pan(image, duration, fps, style, intensity)
+                
+        except Exception as e:
+            logger.warning(f"AI analysis failed, falling back to enhanced zoom_pan: {e}")
+            # Fallback to a sophisticated zoom_pan with multiple phases
+            return self._create_ai_zoom_pan(image, duration, fps, style, 0.4)
     
     def _create_ai_zoom_pan(self, image: Image.Image, duration: int, fps: int, 
                            style: str, intensity: float) -> List[np.ndarray]:
