@@ -1038,8 +1038,9 @@ def download_video(filename: str, request: Request):
             filename=filename,
             media_type="video/mp4",
             headers={
-                "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Length": str(file_size)
+                "Content-Length": str(file_size),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=3600"
             }
         )
 

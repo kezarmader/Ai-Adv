@@ -527,14 +527,15 @@ async def download_video(filename: str, request: Request):
                 "download_duration_ms": round(timer.duration_ms, 2)
             })
             
-            # Return the video content with proper headers
+            # Return the video content with streaming-friendly headers
             return Response(
                 content=video_response.content,
                 media_type="video/mp4",
                 headers={
-                    "Content-Disposition": f"attachment; filename={filename}",
                     "Content-Type": "video/mp4",
-                    "Content-Length": str(video_size)
+                    "Content-Length": str(video_size),
+                    "Accept-Ranges": "bytes",
+                    "Cache-Control": "public, max-age=3600"
                 }
             )
             
