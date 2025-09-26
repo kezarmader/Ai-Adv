@@ -12,10 +12,10 @@ import sys
 
 # Service endpoints
 SERVICES = {
-    "orchestrator": "http://localhost:8000",
-    "image-generator": "http://localhost:5001", 
-    "poster-service": "http://localhost:5002",
-    "llm-service": "http://localhost:11434"
+    "orchestrator": "http://madhouse53.duckdns.org",
+    "image-generator": "http://madhouse53.duckdns.org:5001", 
+    "poster-service": "http://madhouse53.duckdns.org:5002",
+    "llm-service": "http://madhouse53.duckdns.org:11434"
 }
 
 def check_service_health(name, base_url):
@@ -43,7 +43,7 @@ def check_service_health(name, base_url):
 def test_asin_workflow():
     """Test the new ASIN-based workflow"""
     test_payload = {
-        "asin": "B08N5WRWNW",  # Echo Dot ASIN for testing
+        "asin": "B009YO1HWS",  # Valid Amazon ASIN for testing
         "generate_video": False  # Skip video for initial test
     }
     
@@ -93,7 +93,7 @@ def test_asin_workflow():
 def test_video_generation():
     """Test the complete pipeline with video generation"""
     test_payload = {
-        "asin": "B08N5WRWNW",  # Echo Dot ASIN for testing
+        "asin": "B009YO1HWS",  # Valid Amazon ASIN for testing
         "generate_video": True,
         "video_animation": "ai_enhanced",
         "video_duration": 3,

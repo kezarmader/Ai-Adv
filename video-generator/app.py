@@ -751,6 +751,8 @@ async def generate_video(data: VideoRequest):
                     frames = animation_engine.create_parallax_effect(image, data.duration, data.fps, data.style)
                 elif data.animation_type == "fade_effects":
                     frames = animation_engine.create_fade_effects(image, data.duration, data.fps, data.style)
+                elif data.animation_type == "ai_enhanced":
+                    frames = animation_engine.create_ai_enhanced_animation(image, data.duration, data.fps, data.style)
                 else:
                     raise HTTPException(status_code=400, detail=f"Unknown animation type: {data.animation_type}")
                 
