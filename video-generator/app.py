@@ -17,8 +17,16 @@ from io import BytesIO
 import imageio
 from typing import Optional, List
 import logging
-from diffusers import StableDiffusionPipeline, DDIMScheduler, StableVideoDiffusionPipeline 
+from diffusers import StableDiffusionPipeline, DDIMScheduler
 from transformers import CLIPVisionModel, CLIPImageProcessor
+
+# Try to import SVD - will be checked after logger is set up
+try:
+    from diffusers import StableVideoDiffusionPipeline
+    SVD_AVAILABLE = True
+except ImportError:
+    StableVideoDiffusionPipeline = None
+    SVD_AVAILABLE = False
 import torchvision.transforms as transforms
 from logging_config import (
     setup_logging, TimingContext, generate_request_id, request_id,
@@ -694,52 +702,64 @@ if device == "cuda":
 
 # Load Stable Video Diffusion for AI video generation
 svd_pipeline = None
-try:
-    with TimingContext("svd_model_loading", logger):
-        logger.info("Loading Stable Video Diffusion model...")
-        svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
-            "stabilityai/stable-video-diffusion-img2vid-xt",
-            torch_dtype=torch.float16,
-            variant="fp16"
-        ).to(device)
-        logger.info("Stable Video Diffusion model loaded successfully")
-        if device == "cuda":
-            log_gpu_usage(logger, "after_svd_loading")
-except Exception as e:
-    logger.error(f"Failed to load SVD model: {e}. AI video generation will not be available.")
-    svd_pipeline = None
+if not SVD_AVAILABLE:
+    logger.warning("StableVideoDiffusionPipeline not available in this diffusers version. Please upgrade diffusers to >=0.24.0")
+else:
+    try:
+        with TimingContext("svd_model_loading", logger):
+            logger.info("Loading Stable Video Diffusion model...")
+            svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
+                "stabilityai/stable-video-diffusion-img2vid-xt",
+                torch_dtype=torch.float16,
+                variant="fp16"
+            ).to(device)
+            logger.info("Stable Video Diffusion model loaded successfully")
+            if device == "cuda":
+                log_gpu_usage(logger, "after_svd_loading")
+    except Exception as e:
+        logger.error(f"Failed to load SVD model: {e}. AI video generation will not be available.")
+        svd_pipeline = None
 
 # Animation engines not needed - using pure AI generation
 
 # Startup validation
 def validate_service_requirements():
     """Validate that service can run with required GPU and AI models"""
+    issues = []
+    
     if device == "cpu":
-        logger.error("Service requires GPU but CPU detected - terminating")
-        raise RuntimeError("GPU required for AI video generation service")
+        issues.append("Service requires GPU but CPU detected")
+        logger.warning("Service requires GPU but CPU detected")
     
     if not torch.cuda.is_available():
-        logger.error("CUDA not available - GPU required for AI video generation")
-        raise RuntimeError("CUDA-compatible GPU required")
+        issues.append("CUDA not available - GPU required for AI video generation")
+        logger.warning("CUDA not available - GPU required for AI video generation")
+    
+    if not SVD_AVAILABLE:
+        issues.append("StableVideoDiffusionPipeline not available - diffusers version too old")
+        logger.warning("StableVideoDiffusionPipeline not available - diffusers version too old")
     
     if not svd_pipeline:
-        logger.error("Stable Video Diffusion model not loaded - service cannot operate")
-        raise RuntimeError("SVD model required for AI video generation")
+        issues.append("Stable Video Diffusion model not loaded")
+        logger.warning("Stable Video Diffusion model not loaded")
     
-    logger.info("Service validation passed", extra={
-        "device": device,
-        "gpu_available": True,
-        "svd_loaded": True,
-        "mode": "gpu_ai_only"
-    })
+    if not issues:
+        logger.info("Service validation passed", extra={
+            "device": device,
+            "gpu_available": True,
+            "svd_loaded": True,
+            "mode": "gpu_ai_only"
+        })
+        return True
+    else:
+        logger.warning("Service validation found issues", extra={
+            "issues": issues,
+            "service_degraded": True
+        })
+        return False
 
 # Validate service requirements on startup
-try:
-    validate_service_requirements()
-except RuntimeError as e:
-    logger.fatal(f"Service startup failed: {e}")
-    # In production, you might want to exit here: sys.exit(1)
-    # For development, we'll just log the error
+service_ready = validate_service_requirements()
 
 def download_image_from_url(image_url: str) -> Image.Image:
     """Download image from URL"""
