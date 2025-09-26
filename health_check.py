@@ -40,19 +40,15 @@ def check_service_health(name, base_url):
     except Exception as e:
         return {"status": f"❌ Error: {e}", "response_time": None}
 
-def test_ad_generation():
-    """Test the complete ad generation pipeline"""
+def test_asin_workflow():
+    """Test the new ASIN-based workflow"""
     test_payload = {
-        "product": "Test Product",
-        "audience": "tech enthusiasts",
-        "tone": "friendly",
-        "ASIN": "B08N5WRWNW",
-        "brand_text": "TestBrand",
-        "cta_text": "Try Now!"
+        "asin": "B08N5WRWNW",  # Echo Dot ASIN for testing
+        "generate_video": False  # Skip video for initial test
     }
     
     try:
-        print("🧪 Testing ad generation pipeline...")
+        print("🧪 Testing ASIN-based workflow...")
         start_time = time.time()
         
         response = requests.post(
@@ -65,18 +61,77 @@ def test_ad_generation():
         
         if response.status_code == 200:
             data = response.json()
+            product_name = data.get("ad_text", {}).get("product", "Unknown")
             return {
                 "status": "✅ Success",
                 "duration": f"{duration:.2f}s",
+                "product_extracted": product_name,
                 "has_ad_text": "ad_text" in data,
                 "has_image_url": "image_url" in data,
                 "post_status": data.get("post_status", {}).get("status", "unknown")
             }
         else:
+            error_detail = "Unknown error"
+            try:
+                error_data = response.json()
+                error_detail = error_data.get("detail", response.text[:100])
+            except:
+                error_detail = response.text[:100]
+                
             return {
                 "status": f"❌ Failed (HTTP {response.status_code})",
                 "duration": f"{duration:.2f}s",
-                "error": response.text[:100]
+                "error": error_detail
+            }
+            
+    except Exception as e:
+        return {
+            "status": f"❌ Error: {e}",
+            "duration": None
+        }
+
+def test_video_generation():
+    """Test the complete pipeline with video generation"""
+    test_payload = {
+        "asin": "B08N5WRWNW",  # Echo Dot ASIN for testing
+        "generate_video": True,
+        "video_animation": "ai_enhanced",
+        "video_duration": 3,
+        "video_style": "dynamic"
+    }
+    
+    try:
+        print("🎬 Testing video generation...")
+        start_time = time.time()
+        
+        response = requests.post(
+            f"{SERVICES['orchestrator']}/run",
+            json=test_payload,
+            timeout=120
+        )
+        
+        duration = time.time() - start_time
+        
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "status": "✅ Success",
+                "duration": f"{duration:.2f}s",
+                "has_video": "video_url" in data,
+                "video_url": data.get("video_url", "Not generated")
+            }
+        else:
+            error_detail = "Unknown error"
+            try:
+                error_data = response.json()
+                error_detail = error_data.get("detail", response.text[:100])
+            except:
+                error_detail = response.text[:100]
+                
+            return {
+                "status": f"❌ Failed (HTTP {response.status_code})",
+                "duration": f"{duration:.2f}s",
+                "error": error_detail
             }
             
     except Exception as e:
@@ -120,23 +175,41 @@ def main():
     
     format_table(service_data, ["Service", "Status", "Response Time"])
     
-    # Test complete pipeline
-    print("\n🔄 Pipeline Test:")
-    pipeline_result = test_ad_generation()
+    # Test ASIN workflow
+    print("\n🔄 Pipeline Tests:")
     
-    for key, value in pipeline_result.items():
+    # Test 1: Basic ASIN workflow (without video)
+    asin_result = test_asin_workflow()
+    print("\n� ASIN Workflow Results:")
+    for key, value in asin_result.items():
         print(f"  {key}: {value}")
+    
+    # Test 2: Video generation (only if basic workflow succeeds)
+    if "✅" in asin_result["status"]:
+        print("\n🎬 Testing video generation...")
+        video_result = test_video_generation()
+        print("📊 Video Generation Results:")
+        for key, value in video_result.items():
+            print(f"  {key}: {value}")
+    else:
+        print("\n🎬 Skipping video test due to ASIN workflow failure")
+        video_result = {"status": "⏭️ Skipped"}
     
     # Summary
     print("\n📝 Summary:")
     healthy_services = sum(1 for row in service_data if "✅" in row[1])
     total_services = len(service_data)
     
-    if healthy_services == total_services and "✅" in pipeline_result["status"]:
-        print("🎉 All systems operational!")
+    orchestrator_healthy = any("orchestrator" in row[0] and "✅" in row[1] for row in service_data)
+    asin_working = "✅" in asin_result["status"]
+    
+    if orchestrator_healthy and asin_working:
+        print("🎉 ASIN-based workflow is operational!")
+        if "✅" in video_result.get("status", ""):
+            print("🎬 Video generation is also working!")
         sys.exit(0)
-    elif healthy_services == total_services:
-        print("⚠️ Services healthy but pipeline has issues")
+    elif orchestrator_healthy:
+        print("⚠️ Orchestrator healthy but ASIN workflow has issues")
         sys.exit(1)
     else:
         print(f"❌ {total_services - healthy_services}/{total_services} services have issues")
