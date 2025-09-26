@@ -685,7 +685,7 @@ try:
         clip_model = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
         logger.info("CLIP model loaded successfully")
 except Exception as e:
-    logger.warning(f"Could not load CLIP model: {e}. Using basic animation engine.")
+    logger.warning(f"Could not load CLIP model: {e}. Image analysis features will be limited.")
     clip_processor = None
     clip_model = None
 
@@ -706,12 +706,40 @@ try:
         if device == "cuda":
             log_gpu_usage(logger, "after_svd_loading")
 except Exception as e:
-    logger.warning(f"Could not load SVD model: {e}. Falling back to basic animation.")
+    logger.error(f"Failed to load SVD model: {e}. AI video generation will not be available.")
     svd_pipeline = None
 
-# Initialize animation engines
-animation_engine = VideoAnimationEngine()
-ai_animation_engine = AIVideoAnimationEngine(device, clip_model, clip_processor) if clip_model else None
+# Animation engines not needed - using pure AI generation
+
+# Startup validation
+def validate_service_requirements():
+    """Validate that service can run with required GPU and AI models"""
+    if device == "cpu":
+        logger.error("Service requires GPU but CPU detected - terminating")
+        raise RuntimeError("GPU required for AI video generation service")
+    
+    if not torch.cuda.is_available():
+        logger.error("CUDA not available - GPU required for AI video generation")
+        raise RuntimeError("CUDA-compatible GPU required")
+    
+    if not svd_pipeline:
+        logger.error("Stable Video Diffusion model not loaded - service cannot operate")
+        raise RuntimeError("SVD model required for AI video generation")
+    
+    logger.info("Service validation passed", extra={
+        "device": device,
+        "gpu_available": True,
+        "svd_loaded": True,
+        "mode": "gpu_ai_only"
+    })
+
+# Validate service requirements on startup
+try:
+    validate_service_requirements()
+except RuntimeError as e:
+    logger.fatal(f"Service startup failed: {e}")
+    # In production, you might want to exit here: sys.exit(1)
+    # For development, we'll just log the error
 
 def download_image_from_url(image_url: str) -> Image.Image:
     """Download image from URL"""
@@ -741,6 +769,10 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
     
     if not svd_pipeline:
         raise HTTPException(status_code=503, detail="AI video generation not available - SVD model not loaded")
+    
+    # Ensure we're using GPU for AI video generation
+    if device == "cpu":
+        raise HTTPException(status_code=503, detail="GPU required for AI video generation - CPU fallback not allowed")
     
     try:
         with TimingContext("ai_video_generation", logger):
@@ -854,7 +886,7 @@ def schedule_cleanup(video_path: str, filename: str):
 
 @app.post("/generate")
 async def generate_video(data: VideoRequest):
-    """Generate video from image with specified animation"""
+    """Generate video from image - REDIRECTS to AI generation when available"""
     timer = None
     try:
         with TimingContext("video_generation_full", logger) as timer:
@@ -872,96 +904,62 @@ async def generate_video(data: VideoRequest):
             if not data.image_url:
                 raise HTTPException(status_code=400, detail="image_url is required")
             
-            # Download image
-            with TimingContext("image_download", logger):
-                image = download_image_from_url(data.image_url)
-                
-                # Resize image to standard video dimensions if needed
-                if image.size != (DEFAULT_WIDTH, DEFAULT_HEIGHT):
-                    image = image.resize((DEFAULT_WIDTH, DEFAULT_HEIGHT), Image.Resampling.LANCZOS)
-                    logger.info(f"Image resized to {DEFAULT_WIDTH}x{DEFAULT_HEIGHT}")
+            # ENFORCE GPU-BASED AI GENERATION ONLY
+            if not svd_pipeline:
+                raise HTTPException(
+                    status_code=503, 
+                    detail="AI video generation not available - Stable Video Diffusion model not loaded"
+                )
             
-            # Generate animation frames
-            with TimingContext("animation_generation", logger):
-                logger.info(f"Generating {data.animation_type} animation")
-                
-                if data.animation_type == "zoom_pan":
-                    frames = animation_engine.create_zoom_pan_animation(image, data.duration, data.fps, data.style)
-                elif data.animation_type == "ken_burns":
-                    frames = animation_engine.create_ken_burns_effect(image, data.duration, data.fps, data.style)
-                elif data.animation_type == "parallax":
-                    frames = animation_engine.create_parallax_effect(image, data.duration, data.fps, data.style)
-                elif data.animation_type == "fade_effects":
-                    frames = animation_engine.create_fade_effects(image, data.duration, data.fps, data.style)
-                elif data.animation_type == "ai_enhanced":
-                    frames = animation_engine.create_ai_enhanced_animation(image, data.duration, data.fps, data.style)
-                else:
-                    raise HTTPException(status_code=400, detail=f"Unknown animation type: {data.animation_type}")
-                
-                logger.info(f"Generated {len(frames)} frames")
+            if device == "cpu":
+                raise HTTPException(
+                    status_code=503, 
+                    detail="GPU required for AI video generation - CPU fallback not allowed"
+                )
             
-            # Add text overlays if specified
-            if any([data.text_overlay, data.brand_text, data.cta_text]):
-                with TimingContext("text_overlay_addition", logger):
-                    frames = animation_engine.add_text_overlays(
-                        frames, data.text_overlay, data.brand_text, data.cta_text
-                    )
-            
-            # Create video file
-            with TimingContext("video_encoding", logger):
-                filename = f"{uuid.uuid4()}.mp4"
-                video_path = os.path.join(VIDEOS_DIR, filename)
-                
-                logger.info(f"Encoding video to {video_path}")
-                
-                # Use imageio to create MP4 with highly compatible encoding
-                with imageio.get_writer(
-                    video_path, 
-                    fps=data.fps, 
-                    codec='libx264',
-                    output_params=[
-                        '-pix_fmt', 'yuv420p',
-                        '-profile:v', 'baseline', 
-                        '-level', '3.0',
-                        '-crf', '23', 
-                        '-preset', 'medium',
-                        '-movflags', '+faststart'
-                    ]
-                ) as writer:
-                    for frame in frames:
-                        writer.append_data(frame)
-                
-                # Verify file was created and get size
-                if not os.path.exists(video_path):
-                    raise FileNotFoundError(f"Video file was not created: {video_path}")
-                
-                file_size = os.path.getsize(video_path)
-                logger.info("Video encoded successfully", extra={
-                    "video_filename": filename,
-                    "file_size_bytes": file_size,
-                    "file_size_mb": round(file_size / 1024 / 1024, 2),
-                    "frame_count": len(frames)
-                })
-            
-            # Track creation time and schedule cleanup
-            video_timestamps[filename] = time.time()
-            schedule_cleanup(video_path, filename)
-            
-            logger.info("Video generation completed successfully", extra={
-                "video_filename": filename,
-                "total_duration_ms": round(timer.duration_ms, 2),
-                "file_size_mb": round(file_size / 1024 / 1024, 2)
+            # Use AI generation exclusively
+            logger.info("Using AI video generation", extra={
+                "device": device,
+                "svd_available": True,
+                "original_animation": data.animation_type
             })
+            
+            # Download image for AI generation
+            image = download_image_from_url(data.image_url)
+            
+            # Create dramatic prompt based on style and text overlays
+            prompt_parts = []
+            if data.style == "dramatic":
+                prompt_parts.append("Dramatic cinematic transformation")
+            elif data.style == "energetic":
+                prompt_parts.append("Dynamic energetic motion")
+            elif data.style == "smooth":
+                prompt_parts.append("Smooth professional showcase")
+            else:
+                prompt_parts.append("Professional product presentation")
+            
+            if data.text_overlay or data.brand_text:
+                prompt_parts.append("highlighting product features")
+            
+            prompt = ", ".join(prompt_parts) + " with professional lighting and camera movement"
+            
+            # Convert duration to frames (assuming ~30fps source, 15fps output)
+            duration_frames = max(15, min(60, data.duration * 5))  # 5 frames per second roughly
+            
+            filename = generate_ai_video_from_image(
+                image=image,
+                prompt=prompt,
+                duration_frames=duration_frames
+            )
             
             return {
                 "filename": filename,
                 "download_url": f"/download/{filename}",
                 "expires_in_minutes": 15,
-                "file_size_mb": round(file_size / 1024 / 1024, 2),
-                "duration_seconds": data.duration,
-                "fps": data.fps,
-                "animation_type": data.animation_type
+                "file_size_mb": round(os.path.getsize(os.path.join(VIDEOS_DIR, filename)) / 1024 / 1024, 2),
+                "type": "ai_generated"
             }
+
             
     except HTTPException:
         raise
@@ -980,109 +978,59 @@ async def generate_video(data: VideoRequest):
 @app.post("/generate-from-upload")
 async def generate_video_from_upload(
     file: UploadFile = File(...),
-    animation_type: str = "zoom_pan",
-    duration: int = 5,
-    fps: int = 30,
-    style: str = "smooth",
-    text_overlay: Optional[str] = None,
-    brand_text: Optional[str] = None,
-    cta_text: Optional[str] = None
+    prompt: str = "professional product showcase with dynamic motion",
+    duration_frames: int = 25
 ):
-    """Generate video from uploaded image file"""
-    timer = None
+    """Generate AI video from uploaded image file using Stable Video Diffusion"""
     try:
-        with TimingContext("video_generation_upload", logger) as timer:
-            logger.info("Video generation from upload request received", extra={
-                "filename": file.filename,
-                "content_type": file.content_type,
-                "animation_type": animation_type,
-                "duration": duration,
-                "fps": fps
-            })
-            
-            # Validate file type
-            if not file.content_type.startswith("image/"):
-                raise HTTPException(status_code=400, detail="File must be an image")
-            
-            # Read and process uploaded image
-            with TimingContext("image_processing", logger):
-                contents = await file.read()
-                image = Image.open(BytesIO(contents)).convert('RGB')
-                
-                # Resize if needed
-                if image.size != (DEFAULT_WIDTH, DEFAULT_HEIGHT):
-                    image = image.resize((DEFAULT_WIDTH, DEFAULT_HEIGHT), Image.Resampling.LANCZOS)
-                    logger.info(f"Image resized to {DEFAULT_WIDTH}x{DEFAULT_HEIGHT}")
-            
-            # Generate animation frames
-            with TimingContext("animation_generation", logger):
-                if animation_type == "zoom_pan":
-                    frames = animation_engine.create_zoom_pan_animation(image, duration, fps, style)
-                elif animation_type == "ken_burns":
-                    frames = animation_engine.create_ken_burns_effect(image, duration, fps, style)
-                elif animation_type == "parallax":
-                    frames = animation_engine.create_parallax_effect(image, duration, fps, style)
-                elif animation_type == "fade_effects":
-                    frames = animation_engine.create_fade_effects(image, duration, fps, style)
-                else:
-                    raise HTTPException(status_code=400, detail=f"Unknown animation type: {animation_type}")
-            
-            # Add text overlays if specified
-            if any([text_overlay, brand_text, cta_text]):
-                with TimingContext("text_overlay_addition", logger):
-                    frames = animation_engine.add_text_overlays(frames, text_overlay, brand_text, cta_text)
-            
-            # Create video file
-            with TimingContext("video_encoding", logger):
-                filename = f"{uuid.uuid4()}.mp4"
-                video_path = os.path.join(VIDEOS_DIR, filename)
-                
-                with imageio.get_writer(
-                    video_path, 
-                    fps=fps, 
-                    codec='libx264',
-                    output_params=[
-                        '-pix_fmt', 'yuv420p',
-                        '-profile:v', 'baseline', 
-                        '-level', '3.0',
-                        '-crf', '23', 
-                        '-preset', 'medium',
-                        '-movflags', '+faststart'
-                    ]
-                ) as writer:
-                    for frame in frames:
-                        writer.append_data(frame)
-                
-                file_size = os.path.getsize(video_path)
-            
-            # Track and schedule cleanup
-            video_timestamps[filename] = time.time()
-            schedule_cleanup(video_path, filename)
-            
-            logger.info("Video generation from upload completed", extra={
-                "video_filename": filename,
-                "total_duration_ms": round(timer.duration_ms, 2),
-                "file_size_mb": round(file_size / 1024 / 1024, 2)
-            })
-            
-            return {
-                "filename": filename,
-                "download_url": f"/download/{filename}",
-                "expires_in_minutes": 15,
-                "file_size_mb": round(file_size / 1024 / 1024, 2)
-            }
-            
+        logger.info("AI video generation from upload request received", extra={
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
+            "duration_frames": duration_frames
+        })
+        
+        # Enforce GPU-only AI generation
+        if not svd_pipeline:
+            raise HTTPException(
+                status_code=503, 
+                detail="AI video generation not available - Stable Video Diffusion model not loaded"
+            )
+        
+        if device == "cpu":
+            raise HTTPException(
+                status_code=503, 
+                detail="GPU required for AI video generation - CPU fallback not allowed"
+            )
+        
+        # Validate file type
+        if not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="File must be an image")
+        
+        # Read and process uploaded image
+        contents = await file.read()
+        image = Image.open(BytesIO(contents)).convert('RGB')
+        
+        # Generate AI video
+        filename = generate_ai_video_from_image(
+            image=image,
+            prompt=prompt,
+            duration_frames=duration_frames
+        )
+        
+        return {
+            "filename": filename,
+            "download_url": f"/download/{filename}",
+            "expires_in_minutes": 15,
+            "file_size_mb": round(os.path.getsize(os.path.join(VIDEOS_DIR, filename)) / 1024 / 1024, 2),
+            "type": "ai_generated"
+        }
+        
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        logger.error("Error in video generation from upload", extra={
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "duration_ms": round(timer.duration_ms, 2) if timer else None,
-            "traceback": traceback.format_exc()
-        })
-        raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
+        logger.error("AI video generation from upload failed", extra={"error": str(e)})
+        raise HTTPException(status_code=500, detail=f"AI video generation failed: {str(e)}")
 
 @app.post("/generate-ai-video")
 async def generate_ai_video(request: AIVideoRequest):
@@ -1213,12 +1161,54 @@ def check_video_status(filename: str):
 
 @app.get("/")
 def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy", 
-        "service": "video-generator",
-        "supported_animations": ["zoom_pan", "ken_burns", "parallax", "fade_effects"],
-        "supported_styles": ["smooth", "dramatic", "gentle", "energetic"]
+    """Health check endpoint - GPU-only AI video generation service"""
+    gpu_available = torch.cuda.is_available()
+    gpu_device_count = torch.cuda.device_count() if gpu_available else 0
+    current_device = str(device)
+    svd_loaded = bool(svd_pipeline)
+    service_ready = svd_loaded and gpu_available and device != "cpu"
+    
+    status = {
+        "status": "ready" if service_ready else "degraded", 
+        "service": "ai-video-generator",
+        "mode": "gpu_ai_only",
+        "timestamp": time.time(),
+        "gpu_available": gpu_available,
+        "gpu_device_count": gpu_device_count,
+        "current_device": current_device,
+        "svd_model_loaded": svd_loaded,
+        "service_ready": service_ready,
+        "requirements": {
+            "gpu_required": True,
+            "svd_model_required": True,
+            "cpu_fallback": False
+        }
     }
+    
+    if gpu_available:
+        try:
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            gpu_name = torch.cuda.get_device_name(0)
+            status["gpu_memory_gb"] = round(gpu_memory, 2)
+            status["gpu_name"] = gpu_name
+            
+            if torch.cuda.is_available():
+                allocated_memory = torch.cuda.memory_allocated(0) / 1024**3
+                cached_memory = torch.cuda.memory_reserved(0) / 1024**3
+                status["gpu_memory_allocated_gb"] = round(allocated_memory, 2)
+                status["gpu_memory_cached_gb"] = round(cached_memory, 2)
+        except Exception:
+            pass
+    
+    if not service_ready:
+        status["issues"] = []
+        if not gpu_available:
+            status["issues"].append("GPU not available")
+        if device == "cpu":
+            status["issues"].append("Service running on CPU - GPU required")
+        if not svd_loaded:
+            status["issues"].append("Stable Video Diffusion model not loaded")
+    
+    return status
 
 logger.info("Video generator service ready")

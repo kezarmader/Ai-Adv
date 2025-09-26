@@ -306,7 +306,7 @@ async def run_ad_campaign(req: Request):
                     "image_url": image_url
                 })
 
-            # Optional video generation
+            # Optional video generation - ALWAYS use AI video generation
             video_url = None
             if generate_video:
                 with TimingContext("video_generation", logger):
@@ -315,32 +315,31 @@ async def run_ad_campaign(req: Request):
                     if use_product_image and product_images:
                         # Use Amazon product image for AI video generation
                         selected_image = product_images[0]  # Use first product image
-                        video_prompt = {
-                            "image_url": selected_image,
-                            "prompt": f"Dramatic product showcase for {ad_text.get('product', 'this product')}. {ad_text.get('video_scene', 'Dynamic camera movements highlighting product features with professional lighting and cinematic effects.')}",
-                            "duration_frames": 30  # ~2 seconds at 15fps output
-                        }
-                        endpoint = "/generate-ai-video"
+                        image_source = selected_image
+                        prompt_context = f"Dramatic product showcase for {ad_text.get('product', 'this product')}. {ad_text.get('video_scene', 'Dynamic camera movements highlighting product features with professional lighting and cinematic effects.')}"
                         logger.info("Using AI video generation with Amazon product image", extra={
-                            "product_image_url": selected_image,
-                            "video_prompt": video_prompt["prompt"][:100] + "..."
+                            "product_image_url": selected_image
                         })
                     else:
-                        # Use generated image with traditional animation
-                        video_prompt = {
-                            "image_url": f"http://image-generator:5001/download/{filename}",
-                            "animation_type": video_animation,
-                            "duration": video_duration,
-                            "fps": 30,
-                            "style": video_style,
-                            "text_overlay": ad_text.get('product', ''),
-                            "brand_text": ad_text.get('suggested_brand_text', ad_text.get('product', '')),
-                            "cta_text": ad_text.get('suggested_cta', 'Shop Now')
-                        }
-                        endpoint = "/generate"
-                        logger.info("Using traditional animation with generated image", extra={
-                            "animation_type": video_animation
+                        # Use generated image for AI video generation (NOT traditional animation)
+                        image_source = f"http://image-generator:5001/download/{filename}"
+                        prompt_context = f"Dramatic transformation and showcase for {ad_text.get('product', 'this product')}. {ad_text.get('video_scene', 'Cinematic camera movements with dynamic lighting, professional product presentation with smooth transitions and dramatic effects.')}"
+                        logger.info("Using AI video generation with generated image", extra={
+                            "generated_image_filename": filename
                         })
+                    
+                    # ALWAYS use AI video generation endpoint - no fallback to traditional animation
+                    video_prompt = {
+                        "image_url": image_source,
+                        "prompt": prompt_context,
+                        "duration_frames": 30  # ~2 seconds at 15fps output, ~4 seconds with interpolation
+                    }
+                    endpoint = "/generate-ai-video"
+                    
+                    logger.info("Sending AI video generation request", extra={
+                        "prompt": prompt_context[:100] + "..." if len(prompt_context) > 100 else prompt_context,
+                        "duration_frames": video_prompt["duration_frames"]
+                    })
                     
                     video_response = requests.post(f"http://video-generator:5003{endpoint}", json=video_prompt)
                     duration_ms = (time.time() - start_time) * 1000
