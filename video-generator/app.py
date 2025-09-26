@@ -17,7 +17,7 @@ from io import BytesIO
 import imageio
 from typing import Optional, List
 import logging
-from diffusers import StableDiffusionPipeline, DDIMScheduler
+from diffusers import StableDiffusionPipeline, DDIMScheduler, StableVideoDiffusionPipeline 
 from transformers import CLIPVisionModel, CLIPImageProcessor
 import torchvision.transforms as transforms
 from logging_config import (
@@ -101,6 +101,11 @@ class VideoRequest(BaseModel):
     text_overlay: Optional[str] = None
     brand_text: Optional[str] = None
     cta_text: Optional[str] = None
+
+class AIVideoRequest(BaseModel):
+    image_url: str
+    prompt: str = "dramatic transformation with dynamic motion"
+    duration_frames: int = 25  # SVD works with frames, not seconds
 
 class AIVideoAnimationEngine:
     """AI-powered video animation engine using CLIP for motion understanding"""
@@ -687,6 +692,23 @@ except Exception as e:
 if device == "cuda":
     log_gpu_usage(logger, "after_clip_loading")
 
+# Load Stable Video Diffusion for AI video generation
+svd_pipeline = None
+try:
+    with TimingContext("svd_model_loading", logger):
+        logger.info("Loading Stable Video Diffusion model...")
+        svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
+            "stabilityai/stable-video-diffusion-img2vid-xt",
+            torch_dtype=torch.float16,
+            variant="fp16"
+        ).to(device)
+        logger.info("Stable Video Diffusion model loaded successfully")
+        if device == "cuda":
+            log_gpu_usage(logger, "after_svd_loading")
+except Exception as e:
+    logger.warning(f"Could not load SVD model: {e}. Falling back to basic animation.")
+    svd_pipeline = None
+
 # Initialize animation engines
 animation_engine = VideoAnimationEngine()
 ai_animation_engine = AIVideoAnimationEngine(device, clip_model, clip_processor) if clip_model else None
@@ -713,6 +735,92 @@ def download_image_from_url(image_url: str) -> Image.Image:
             "error": str(e)
         })
         raise HTTPException(status_code=400, detail=f"Error downloading image: {str(e)}")
+
+def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 25) -> str:
+    """Generate AI video using Stable Video Diffusion"""
+    
+    if not svd_pipeline:
+        raise HTTPException(status_code=503, detail="AI video generation not available - SVD model not loaded")
+    
+    try:
+        with TimingContext("ai_video_generation", logger):
+            logger.info("Starting AI video generation", extra={
+                "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                "duration_frames": duration_frames,
+                "input_image_size": image.size
+            })
+            
+            # Resize image for SVD (typically requires specific dimensions)
+            target_size = (1024, 576)  # SVD's preferred aspect ratio
+            image_resized = image.resize(target_size, Image.Resampling.LANCZOS)
+            
+            # Generate video frames using SVD
+            with torch.no_grad():
+                frames = svd_pipeline(
+                    image=image_resized,
+                    height=target_size[1],
+                    width=target_size[0],
+                    num_frames=duration_frames,
+                    motion_bucket_id=127,  # Controls motion intensity (1-255)
+                    fps=7,  # SVD works best at 7 FPS
+                    noise_aug_strength=0.1,  # Slight noise for variation
+                    decode_chunk_size=8,  # Memory optimization
+                ).frames[0]
+            
+            # Convert frames to numpy arrays
+            video_frames = []
+            for frame in frames:
+                # Convert PIL to numpy array
+                frame_np = np.array(frame)
+                video_frames.append(frame_np)
+            
+            # Save as MP4
+            filename = f"{uuid.uuid4()}.mp4"
+            video_path = os.path.join(VIDEOS_DIR, filename)
+            
+            # Use imageio to save with better quality
+            with imageio.get_writer(
+                video_path, 
+                fps=15,  # Upsampled from 7 FPS for smoother playback
+                codec='libx264',
+                output_params=[
+                    '-pix_fmt', 'yuv420p',
+                    '-profile:v', 'high', 
+                    '-level', '4.0',
+                    '-crf', '18',  # High quality
+                    '-preset', 'slow'  # Better compression
+                ]
+            ) as writer:
+                # Interpolate frames for smoother playback
+                for i, frame in enumerate(video_frames):
+                    writer.append_data(frame)
+                    # Add interpolated frame (simple duplication for now)
+                    if i < len(video_frames) - 1:
+                        writer.append_data(frame)
+            
+            file_size = os.path.getsize(video_path)
+            logger.info("AI video generation completed", extra={
+                "video_filename": filename,
+                "file_size_bytes": file_size,
+                "file_size_mb": round(file_size / 1024 / 1024, 2),
+                "frames_generated": len(video_frames),
+                "output_fps": 15
+            })
+            
+            # Schedule cleanup after 15 minutes
+            video_timestamps[filename] = time.time()
+            cleanup_thread = threading.Thread(target=cleanup_video, args=(video_path, filename))
+            cleanup_thread.daemon = True
+            cleanup_thread.start()
+            
+            return filename
+            
+    except Exception as e:
+        logger.error("AI video generation failed", extra={
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+        raise HTTPException(status_code=500, detail=f"AI video generation failed: {str(e)}")
 
 def cleanup_video(video_path: str, filename: str):
     """Delete video file after 15 minutes"""
@@ -975,6 +1083,40 @@ async def generate_video_from_upload(
             "traceback": traceback.format_exc()
         })
         raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
+
+@app.post("/generate-ai-video")
+async def generate_ai_video(request: AIVideoRequest):
+    """Generate AI video using Stable Video Diffusion"""
+    try:
+        logger.info("AI video generation request received", extra={
+            "image_url": request.image_url,
+            "prompt": request.prompt[:100] + "..." if len(request.prompt) > 100 else request.prompt,
+            "duration_frames": request.duration_frames
+        })
+        
+        # Download image
+        image = download_image_from_url(request.image_url)
+        
+        # Generate AI video
+        filename = generate_ai_video_from_image(
+            image=image, 
+            prompt=request.prompt, 
+            duration_frames=request.duration_frames
+        )
+        
+        return {
+            "filename": filename, 
+            "status": "success", 
+            "type": "ai_generated",
+            "download_url": f"/download/{filename}",
+            "expires_in_minutes": 15
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AI video generation failed", extra={"error": str(e)})
+        raise HTTPException(status_code=500, detail=f"AI video generation failed: {str(e)}")
 
 @app.get("/download/{filename}")
 def download_video(filename: str, request: Request):

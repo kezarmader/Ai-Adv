@@ -311,26 +311,47 @@ async def run_ad_campaign(req: Request):
             if generate_video:
                 with TimingContext("video_generation", logger):
                     start_time = time.time()
-                    video_prompt = {
-                        "image_url": f"http://image-generator:5001/download/{filename}",
-                        "animation_type": video_animation,
-                        "duration": video_duration,
-                        "fps": 30,
-                        "style": video_style,
-                        "text_overlay": ad_text.get('product', ''),
-                        "brand_text": ad_text.get('suggested_brand_text', ad_text.get('product', '')),
-                        "cta_text": ad_text.get('suggested_cta', 'Shop Now')
-                    }
                     
-                    video_response = requests.post("http://video-generator:5003/generate", json=video_prompt)
+                    if use_product_image and product_images:
+                        # Use Amazon product image for AI video generation
+                        selected_image = product_images[0]  # Use first product image
+                        video_prompt = {
+                            "image_url": selected_image,
+                            "prompt": f"Dramatic product showcase for {ad_text.get('product', 'this product')}. {ad_text.get('video_scene', 'Dynamic camera movements highlighting product features with professional lighting and cinematic effects.')}",
+                            "duration_frames": 30  # ~2 seconds at 15fps output
+                        }
+                        endpoint = "/generate-ai-video"
+                        logger.info("Using AI video generation with Amazon product image", extra={
+                            "product_image_url": selected_image,
+                            "video_prompt": video_prompt["prompt"][:100] + "..."
+                        })
+                    else:
+                        # Use generated image with traditional animation
+                        video_prompt = {
+                            "image_url": f"http://image-generator:5001/download/{filename}",
+                            "animation_type": video_animation,
+                            "duration": video_duration,
+                            "fps": 30,
+                            "style": video_style,
+                            "text_overlay": ad_text.get('product', ''),
+                            "brand_text": ad_text.get('suggested_brand_text', ad_text.get('product', '')),
+                            "cta_text": ad_text.get('suggested_cta', 'Shop Now')
+                        }
+                        endpoint = "/generate"
+                        logger.info("Using traditional animation with generated image", extra={
+                            "animation_type": video_animation
+                        })
+                    
+                    video_response = requests.post(f"http://video-generator:5003{endpoint}", json=video_prompt)
                     duration_ms = (time.time() - start_time) * 1000
                     
                     logger.info("Video generation request completed", extra={
                         "service": "video-generator",
-                        "endpoint": "/generate",
+                        "endpoint": endpoint,
                         "status_code": video_response.status_code,
                         "duration_ms": round(duration_ms, 2),
-                        "animation_type": video_animation
+                        "video_type": "ai_generated" if endpoint == "/generate-ai-video" else "animated",
+                        "animation_type": video_animation if endpoint == "/generate" else "stable_video_diffusion"
                     })
                     
                     if video_response.status_code == 200:
