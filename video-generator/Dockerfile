@@ -17,6 +17,11 @@ WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
+
+# Install PyTorch with CUDA support first
+RUN pip install --no-cache-dir torch==2.2.0+cu121 torchvision==0.17.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+
+# Install other requirements
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code

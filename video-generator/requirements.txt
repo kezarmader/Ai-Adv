@@ -7,8 +7,6 @@ numpy==1.25.2
 imageio[ffmpeg]==2.33.1
 requests==2.31.0
 python-multipart==0.0.6
-torch==2.1.0
-torchvision==0.16.0
 diffusers==0.24.0
 transformers==4.36.0
 huggingface_hub==0.20.0
