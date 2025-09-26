@@ -806,8 +806,13 @@ async def generate_video(data: VideoRequest):
                 
                 logger.info(f"Encoding video to {video_path}")
                 
-                # Use imageio to create MP4
-                with imageio.get_writer(video_path, fps=data.fps, codec='libx264', quality=8) as writer:
+                # Use imageio to create MP4 with compatible encoding
+                with imageio.get_writer(
+                    video_path, 
+                    fps=data.fps, 
+                    codec='libx264',
+                    output_params=['-pix_fmt', 'yuv420p', '-crf', '23', '-preset', 'medium']
+                ) as writer:
                     for frame in frames:
                         writer.append_data(frame)
                 
@@ -917,7 +922,12 @@ async def generate_video_from_upload(
                 filename = f"{uuid.uuid4()}.mp4"
                 video_path = os.path.join(VIDEOS_DIR, filename)
                 
-                with imageio.get_writer(video_path, fps=fps, codec='libx264', quality=8) as writer:
+                with imageio.get_writer(
+                    video_path, 
+                    fps=fps, 
+                    codec='libx264',
+                    output_params=['-pix_fmt', 'yuv420p', '-crf', '23', '-preset', 'medium']
+                ) as writer:
                     for frame in frames:
                         writer.append_data(frame)
                 
