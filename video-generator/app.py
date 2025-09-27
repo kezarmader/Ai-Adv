@@ -917,6 +917,15 @@ def download_image_from_url(image_url: str) -> Image.Image:
 def extract_product_info_from_metadata(metadata: ProductMetadata) -> dict:
     """Extract factual product information from ASIN service metadata"""
     
+    logger.info("Processing product metadata", extra={
+        "metadata_provided": bool(metadata),
+        "metadata_type": type(metadata).__name__ if metadata else None,
+        "product_title": getattr(metadata, 'product_title', None) if metadata else None,
+        "brand": getattr(metadata, 'brand', None) if metadata else None,
+        "category": getattr(metadata, 'category', None) if metadata else None,
+        "use_case": getattr(metadata, 'use_case', None) if metadata else None
+    })
+    
     if not metadata:
         # Fallback minimal info when no metadata provided
         return {
@@ -1176,14 +1185,14 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             original_width, original_height = image.size
             original_aspect = original_width / original_height
             
-            # MEMORY-OPTIMIZED: Smaller resolutions to prevent OOM
-            # Use smaller sizes to reduce memory usage
+            # ULTRA MEMORY-OPTIMIZED: Much smaller resolutions to prevent OOM
+            # Use very conservative sizes to ensure generation completes
             if original_aspect > 1.5:  # Very wide - crop to smaller vertical
-                target_size = (512, 768)   # MEMORY FIX: Smaller 4:3 vertical
+                target_size = (384, 576)   # ULTRA MEMORY FIX: Smaller 2:3 vertical
             elif original_aspect > 1.0:  # Landscape - smaller square
-                target_size = (512, 512)   # MEMORY FIX: Smaller 1:1 square format
+                target_size = (384, 384)   # ULTRA MEMORY FIX: Smaller 1:1 square format
             else:  # Portrait or square - smaller vertical
-                target_size = (512, 768)   # MEMORY FIX: Smaller 4:3 vertical
+                target_size = (384, 576)   # ULTRA MEMORY FIX: Smaller 2:3 vertical
             
             # Extract factual product information from ASIN service metadata
             product_info = extract_product_info_from_metadata(product_metadata)
@@ -1254,11 +1263,25 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                 "final_intensity": motion_intensity
             })
             
-            # MEMORY-OPTIMIZED SVD GENERATION: Balance quality and memory usage
-            # Clear GPU cache before generation
+            # ULTRA MEMORY-OPTIMIZED SVD GENERATION: Aggressive memory management
+            # Clear GPU cache and force garbage collection before generation
             if device == "cuda":
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
+                # Force garbage collection
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                
+                # Log memory usage before generation
+                allocated = torch.cuda.memory_allocated() / 1024**3
+                reserved = torch.cuda.memory_reserved() / 1024**3
+                logger.info("Pre-SVD memory status", extra={
+                    "allocated_gb": round(allocated, 2),
+                    "reserved_gb": round(reserved, 2),
+                    "target_frames": duration_frames,
+                    "target_size": target_size
+                })
             
             # Generate with proper frame count and timing
             actual_svd_fps = 8  # SVD's actual generation rate
@@ -1271,7 +1294,7 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                     motion_bucket_id=motion_intensity,  # Engaging motion for mobile based on use case
                     fps=actual_svd_fps,  # Proper SVD generation FPS
                     noise_aug_strength=0.02,  # Balanced noise for quality
-                    decode_chunk_size=4,  # Optimized chunk size for memory efficiency
+                    decode_chunk_size=1,  # ULTRA MEMORY FIX: Smallest chunk size to minimize memory usage
                     num_videos_per_prompt=1,  # Generate single high-quality video
                     generator=torch.Generator().manual_seed(42)  # Consistent quality
                 ).frames[0]
@@ -1446,9 +1469,9 @@ async def generate_video(data: VideoRequest):
             # The generate_ai_video_from_image function will analyze the product and create the prompt
             prompt = ""  # Empty prompt will trigger intelligent generation
             
-            # BALANCED MEMORY-OPTIMIZED: Proper duration while managing memory
-            # SVD generates at ~7-8fps, so we need more frames for desired duration
-            duration_frames = max(25, min(120, data.duration * 15))  # Proper frame count for SVD generation
+            # MEMORY-OPTIMIZED: Conservative frame count to prevent OOM
+            # SVD generates at ~8fps, so we need reasonable frame count for desired duration
+            duration_frames = max(16, min(64, data.duration * 6))  # Conservative frame count to prevent OOM
             
             filename = generate_ai_video_from_image(
                 image=image,
