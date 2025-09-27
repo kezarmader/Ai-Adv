@@ -1,7 +1,11 @@
-FROM python:3.11-slim
+FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04
 
-# Install system dependencies for Linux deployment
-RUN apt-get update && apt-get install -y \
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /app
+
+# Install system dependencies
+RUN apt update && apt install -y \
+    python3 python3-pip python-is-python3 \
     ffmpeg \
     libsm6 \
     libxext6 \
@@ -9,29 +13,32 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libfontconfig1 \
     fonts-dejavu-core \
-    git \
-    wget \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    git wget curl && \
+    apt clean && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
-WORKDIR /app
+# Critical: Set CUDA architecture list to include RTX 5090 (sm_120) 
+ENV TORCH_CUDA_ARCH_LIST="8.9;9.0;12.0"
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 
-# Install PyTorch nightly with CUDA 12.6 for RTX 5090 Blackwell architecture support
-RUN pip install --no-cache-dir --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126
+# Upgrade pip and install nightly PyTorch with CUDA 12.8 (RTX 5090 support)
+RUN pip install --upgrade pip && \
+    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
-# Install other requirements
-RUN pip install --no-cache-dir -r requirements.txt
+# Install other requirements (excluding torch already installed)
+RUN grep -v 'torch' requirements.txt > temp_requirements.txt && \
+    pip install -r temp_requirements.txt --no-cache-dir
 
 # Copy application code
 COPY . .
 
 # Create directories for videos and temp files
-RUN mkdir -p /app/videos /app/temp
+RUN mkdir -p /app/videos /app/temp && chmod 755 /app/videos /app/temp
+
+# Optional debugging flags for RTX 5090 troubleshooting
+ENV CUDA_LAUNCH_BLOCKING=1
+ENV TORCH_USE_CUDA_DSA=1
 
 # Expose port
 EXPOSE 5003
