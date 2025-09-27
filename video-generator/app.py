@@ -109,6 +109,7 @@ class VideoRequest(BaseModel):
     text_overlay: Optional[str] = None
     brand_text: Optional[str] = None
     cta_text: Optional[str] = None
+    use_model: bool = True  # Whether to create a model scene first
 
 class AIVideoRequest(BaseModel):
     image_url: str
@@ -697,37 +698,65 @@ except Exception as e:
     clip_processor = None
     clip_model = None
 
+# Load image generation model for creating model scenes
+try:
+    with TimingContext("image_generation_model_loading", logger):
+        logger.info("Loading image generation model for product modeling...")
+        from diffusers import StableDiffusionXLPipeline
+        
+        # Use a lighter SDXL model for product modeling
+        image_pipeline = StableDiffusionXLPipeline.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            torch_dtype=torch.float16,
+            variant="fp16",
+            use_safetensors=True
+        ).to(device)
+        
+        # Enable memory efficient attention
+        image_pipeline.enable_model_cpu_offload()
+        image_pipeline.enable_vae_slicing()
+        
+        logger.info("Image generation model loaded successfully")
+except Exception as e:
+    logger.warning(f"Could not load image generation model: {e}. Product modeling features will be limited.")
+    image_pipeline = None
+
 if device == "cuda":
     log_gpu_usage(logger, "after_clip_loading")
 
-def _resize_with_padding(image: Image.Image, target_size: tuple) -> Image.Image:
-    """Resize image to target size while preserving aspect ratio using padding"""
+def _resize_with_smart_crop(image: Image.Image, target_size: tuple) -> Image.Image:
+    """Resize image to target size using intelligent cropping to preserve important content"""
     target_width, target_height = target_size
     original_width, original_height = image.size
     
-    # Calculate scaling factor to fit image within target dimensions
-    scale_width = target_width / original_width
-    scale_height = target_height / original_height
-    scale = min(scale_width, scale_height)
+    target_aspect = target_width / target_height
+    original_aspect = original_width / original_height
     
-    # Calculate new dimensions
-    new_width = int(original_width * scale)
-    new_height = int(original_height * scale)
+    if abs(target_aspect - original_aspect) < 0.1:
+        # Aspect ratios are close, just resize
+        return image.resize(target_size, Image.Resampling.LANCZOS)
     
-    # Resize image
-    resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    # Calculate crop dimensions to match target aspect ratio
+    if original_aspect > target_aspect:
+        # Original is wider, crop width (keep height)
+        new_width = int(original_height * target_aspect)
+        new_height = original_height
+        # Center crop horizontally
+        left = (original_width - new_width) // 2
+        top = 0
+    else:
+        # Original is taller, crop height (keep width)
+        new_width = original_width
+        new_height = int(original_width / target_aspect)
+        # Crop from top to preserve subject (products usually centered-top)
+        left = 0
+        top = max(0, (original_height - new_height) // 4)  # Slight bias toward top
     
-    # Create new image with target dimensions and black background
-    padded_image = Image.new('RGB', target_size, (0, 0, 0))
+    # Crop the image
+    cropped = image.crop((left, top, left + new_width, top + new_height))
     
-    # Calculate position to center the resized image
-    x_offset = (target_width - new_width) // 2
-    y_offset = (target_height - new_height) // 2
-    
-    # Paste resized image onto padded background
-    padded_image.paste(resized_image, (x_offset, y_offset))
-    
-    return padded_image
+    # Resize to exact target size
+    return cropped.resize(target_size, Image.Resampling.LANCZOS)
 
 # Load Stable Video Diffusion with nightly PyTorch
 svd_pipeline = None
@@ -776,6 +805,9 @@ def validate_service_requirements():
         issues.append("Stable Video Diffusion model not loaded")
         logger.warning("Stable Video Diffusion model not loaded")
     
+    if not image_pipeline:
+        logger.info("Image generation model not loaded - model scenes will be disabled")
+    
     if not issues:
         logger.info("Service validation passed", extra={
             "device": device,
@@ -817,6 +849,167 @@ def download_image_from_url(image_url: str) -> Image.Image:
         })
         raise HTTPException(status_code=400, detail=f"Error downloading image: {str(e)}")
 
+def analyze_product_type(image: Image.Image) -> str:
+    """Analyze product type to determine appropriate model scenario"""
+    # Simple heuristic based on image characteristics
+    # In production, this could use a trained classifier
+    
+    width, height = image.size
+    aspect_ratio = width / height
+    
+    # Convert to numpy for basic analysis
+    img_array = np.array(image)
+    
+    # Analyze colors to guess product type
+    avg_colors = np.mean(img_array, axis=(0, 1))
+    brightness = np.mean(avg_colors)
+    
+    # Simple product categorization logic
+    if aspect_ratio < 0.7:  # Tall products
+        if brightness > 200:  # Light colors
+            return "skincare"
+        else:
+            return "bottle"
+    elif aspect_ratio > 1.5:  # Wide products
+        return "tech"
+    else:  # Square-ish products
+        if brightness > 180:
+            return "cosmetics"
+        else:
+            return "accessory"
+
+def create_model_scene(product_image: Image.Image, product_type: str) -> Image.Image:
+    """Create a lifestyle scene with a model using/demonstrating the product"""
+    
+    if not image_pipeline:
+        logger.warning("Image generation model not available, returning original product image")
+        return product_image
+    
+    try:
+        with TimingContext("model_scene_generation", logger):
+            logger.info("Creating model scene", extra={
+                "product_type": product_type,
+                "original_size": product_image.size
+            })
+            
+            # Define prompts based on product type
+            model_prompts = {
+                "skincare": "professional model applying skincare product, clean modern bathroom, soft natural lighting, commercial photography style, elegant hands, serene expression",
+                "cosmetics": "beautiful model using makeup product, professional makeup studio, perfect lighting, glamorous style, confident expression, commercial beauty photography",
+                "bottle": "athletic person using water bottle or supplement, gym or outdoor setting, active lifestyle, professional fitness photography, dynamic pose",
+                "tech": "person using tech gadget, modern minimalist setting, professional product photography, focused expression, clean aesthetic",
+                "accessory": "stylish person wearing or using accessory, fashion photography style, professional lighting, modern urban background"
+            }
+            
+            base_prompt = model_prompts.get(product_type, model_prompts["accessory"])
+            full_prompt = f"{base_prompt}, high quality, commercial advertisement style, 8k resolution, professional photography"
+            
+            negative_prompt = "low quality, blurry, distorted, amateur, poor lighting, cluttered background, unprofessional"
+            
+            # Generate the model scene
+            with torch.no_grad():
+                generated_images = image_pipeline(
+                    prompt=full_prompt,
+                    negative_prompt=negative_prompt,
+                    num_inference_steps=25,  # Balanced quality/speed
+                    guidance_scale=7.5,
+                    width=768,
+                    height=768,
+                    num_images_per_prompt=1
+                ).images
+            
+            model_scene = generated_images[0]
+            
+            # Composite the original product into the scene
+            # This is a simple overlay - in production, you'd use more sophisticated blending
+            scene_with_product = composite_product_into_scene(model_scene, product_image, product_type)
+            
+            logger.info("Model scene created successfully", extra={
+                "generated_size": model_scene.size,
+                "final_size": scene_with_product.size
+            })
+            
+            return scene_with_product
+            
+    except Exception as e:
+        logger.error("Failed to create model scene", extra={
+            "error": str(e),
+            "product_type": product_type
+        })
+        # Fallback to original product image
+        return product_image
+
+def composite_product_into_scene(scene: Image.Image, product: Image.Image, product_type: str) -> Image.Image:
+    """Composite the product image into the generated model scene"""
+    try:
+        # Create a copy of the scene
+        composite = scene.copy()
+        
+        # Resize product to appropriate size for compositing
+        scene_width, scene_height = scene.size
+        
+        # Size the product based on type
+        size_ratios = {
+            "skincare": 0.15,    # Small, held in hands
+            "cosmetics": 0.12,   # Small makeup item
+            "bottle": 0.2,       # Medium bottle
+            "tech": 0.25,        # Larger tech device
+            "accessory": 0.18    # Medium accessory
+        }
+        
+        ratio = size_ratios.get(product_type, 0.15)
+        product_size = int(min(scene_width, scene_height) * ratio)
+        
+        # Maintain aspect ratio when resizing
+        product_aspect = product.size[0] / product.size[1]
+        if product_aspect > 1:
+            # Wider than tall
+            new_width = product_size
+            new_height = int(product_size / product_aspect)
+        else:
+            # Taller than wide
+            new_height = product_size
+            new_width = int(product_size * product_aspect)
+        
+        product_resized = product.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Position based on product type
+        positions = {
+            "skincare": (int(scene_width * 0.7), int(scene_height * 0.6)),  # Lower right, in hands area
+            "cosmetics": (int(scene_width * 0.65), int(scene_height * 0.5)), # Center-right
+            "bottle": (int(scene_width * 0.75), int(scene_height * 0.4)),    # Upper right
+            "tech": (int(scene_width * 0.6), int(scene_height * 0.6)),       # Center-right
+            "accessory": (int(scene_width * 0.5), int(scene_height * 0.7))   # Center-bottom
+        }
+        
+        pos_x, pos_y = positions.get(product_type, (int(scene_width * 0.7), int(scene_height * 0.6)))
+        
+        # Ensure the product fits within scene bounds
+        pos_x = min(pos_x, scene_width - new_width)
+        pos_y = min(pos_y, scene_height - new_height)
+        
+        # Create a mask for smoother blending
+        mask = Image.new('L', product_resized.size, 255)
+        
+        # Apply slight transparency to blend better
+        if product_resized.mode != 'RGBA':
+            product_resized = product_resized.convert('RGBA')
+        
+        # Reduce opacity slightly for natural integration
+        alpha_data = list(product_resized.getdata())
+        alpha_data = [(r, g, b, int(a * 0.95)) for r, g, b, a in alpha_data]
+        product_resized.putdata(alpha_data)
+        
+        # Paste the product onto the scene
+        composite.paste(product_resized, (pos_x, pos_y), product_resized)
+        
+        return composite
+        
+    except Exception as e:
+        logger.error("Failed to composite product into scene", extra={"error": str(e)})
+        # Return the scene without product overlay
+        return scene
+
 def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 25) -> str:
     """Generate AI video using Stable Video Diffusion - GPU ONLY"""
     
@@ -842,18 +1035,16 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             original_width, original_height = image.size
             original_aspect = original_width / original_height
             
-            # SVD works best with these dimensions (multiple of 64)
-            if original_aspect > 1.5:  # Wide landscape
-                target_size = (1024, 576)  # 16:9
-            elif original_aspect > 1.0:  # Mild landscape
-                target_size = (768, 576)   # 4:3
-            elif original_aspect > 0.7:  # Portrait
-                target_size = (576, 768)   # 3:4
-            else:  # Very tall portrait
-                target_size = (576, 1024)  # 9:16
+            # Use SVD's optimal dimensions (must be multiple of 64 for best results)
+            if original_aspect > 1.2:  # Landscape
+                target_size = (1024, 576)  # 16:9 - SVD's preferred landscape
+            elif original_aspect > 0.8:  # Square-ish
+                target_size = (768, 768)   # 1:1 - Good for product shots
+            else:  # Portrait
+                target_size = (576, 1024)  # 9:16 - Mobile-friendly portrait
             
-            # Resize with padding to avoid distortion
-            image_resized = _resize_with_padding(image, target_size)
+            # Resize with smart cropping to preserve content quality
+            image_resized = _resize_with_smart_crop(image, target_size)
             
             logger.info("Image resized for SVD", extra={
                 "original_size": image.size,
@@ -1003,8 +1194,20 @@ async def generate_video(data: VideoRequest):
             # Download image for AI generation
             image = download_image_from_url(data.image_url)
             
+            # Create model scene if requested
+            if data.use_model and image_pipeline:
+                logger.info("Creating model scene for product demonstration")
+                product_type = analyze_product_type(image)
+                image = create_model_scene(image, product_type)
+                logger.info("Model scene created", extra={"product_type": product_type})
+            elif data.use_model:
+                logger.warning("Model scene requested but image generation model not available")
+            
             # Create dramatic prompt based on style and text overlays
             prompt_parts = []
+            if data.use_model:
+                prompt_parts.append("Professional model demonstrating product")
+            
             if data.style == "dramatic":
                 prompt_parts.append("Dramatic cinematic transformation")
             elif data.style == "energetic":
@@ -1017,7 +1220,10 @@ async def generate_video(data: VideoRequest):
             if data.text_overlay or data.brand_text:
                 prompt_parts.append("highlighting product features")
             
-            prompt = ", ".join(prompt_parts) + " with professional lighting and camera movement"
+            if data.use_model:
+                prompt = ", ".join(prompt_parts) + " with lifestyle photography, professional model, commercial advertisement style"
+            else:
+                prompt = ", ".join(prompt_parts) + " with professional lighting and camera movement"
             
             # Convert duration to frames (assuming ~30fps source, 15fps output)
             duration_frames = max(15, min(60, data.duration * 5))  # 5 frames per second roughly
@@ -1253,10 +1459,13 @@ def health_check():
         "gpu_device_count": gpu_device_count,
         "current_device": current_device,
         "svd_model_loaded": svd_loaded,
+        "image_model_loaded": bool(image_pipeline),
+        "model_scenes_available": bool(image_pipeline),
         "service_ready": service_ready,
         "requirements": {
             "gpu_required": True,
             "svd_model_required": True,
+            "image_model_optional": True,
             "cpu_fallback": False
         }
     }
