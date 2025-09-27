@@ -109,7 +109,7 @@ class VideoRequest(BaseModel):
     text_overlay: Optional[str] = None
     brand_text: Optional[str] = None
     cta_text: Optional[str] = None
-    use_model: bool = True  # Whether to create a model scene first
+    use_model: bool = False  # Whether to create a model scene first (disabled for better quality)
 
 class AIVideoRequest(BaseModel):
     image_url: str
@@ -725,17 +725,22 @@ if device == "cuda":
     log_gpu_usage(logger, "after_clip_loading")
 
 def _enhance_for_svd(image: Image.Image) -> Image.Image:
-    """Enhance image quality specifically for better SVD video generation"""
-    # Enhance contrast and sharpness to preserve product details
+    """Enhance image quality specifically for product-focused SVD video generation"""
+    # Strong contrast enhancement to make product pop
     enhancer = ImageEnhance.Contrast(image)
-    image = enhancer.enhance(1.1)  # Slight contrast boost
+    image = enhancer.enhance(1.25)  # Stronger contrast for product clarity
     
+    # Enhanced sharpness to preserve crisp product details
     enhancer = ImageEnhance.Sharpness(image)
-    image = enhancer.enhance(1.2)  # Moderate sharpness boost
+    image = enhancer.enhance(1.4)  # Higher sharpness for product definition
     
-    # Slightly enhance color saturation for better visual appeal
+    # Enhanced color saturation for vibrant product colors
     enhancer = ImageEnhance.Color(image)
-    image = enhancer.enhance(1.05)  # Very subtle color boost
+    image = enhancer.enhance(1.15)  # More color enhancement for product appeal
+    
+    # Slight brightness adjustment for better visibility
+    enhancer = ImageEnhance.Brightness(image)
+    image = enhancer.enhance(1.05)  # Subtle brightness boost
     
     return image
 
@@ -1071,16 +1076,16 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                 "target_aspect": f"{target_size[0]/target_size[1]:.3f}"
             })
             
-            # Determine motion intensity based on style for product videos
+            # Determine motion intensity based on style - optimized for product focus
             style_motion_map = {
-                "smooth": 30,      # Very gentle motion
-                "gentle": 35,      # Slightly more motion  
-                "dramatic": 60,    # Moderate motion for drama
-                "energetic": 70,   # More motion but still controlled
-                "product show": 25 # Minimal motion for product focus
+                "smooth": 20,        # Very gentle motion
+                "gentle": 25,        # Slightly more motion  
+                "dramatic": 45,      # Moderate motion for drama
+                "energetic": 55,     # More motion but controlled
+                "product show": 15   # Ultra-minimal motion for sharp product focus
             }
             
-            motion_intensity = style_motion_map.get(style, 40)  # Default conservative
+            motion_intensity = style_motion_map.get(style, 25)  # Default very conservative
             
             # Generate video frames using SVD with optimized settings for product videos
             with torch.no_grad():
@@ -1106,19 +1111,21 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             filename = f"{uuid.uuid4()}.mp4"
             video_path = os.path.join(VIDEOS_DIR, filename)
             
-            # Use imageio to save with optimized quality for product videos
+            # Use imageio to save with optimized quality for product showcase videos
             with imageio.get_writer(
                 video_path, 
-                fps=10,  # Slower FPS for smoother motion, less jarring
+                fps=12,  # Slightly higher FPS for smooth product showcase
                 codec='libx264',
                 output_params=[
                     '-pix_fmt', 'yuv420p',
                     '-profile:v', 'high', 
-                    '-level', '4.0',
-                    '-crf', '15',  # Even higher quality to preserve product details
+                    '-level', '4.2',
+                    '-crf', '12',  # Ultra-high quality for sharp product details
                     '-preset', 'slower',  # Best compression for quality
                     '-tune', 'stillimage',  # Optimize for product/still image content
-                    '-movflags', '+faststart'  # Web optimization
+                    '-movflags', '+faststart',  # Web optimization
+                    '-bf', '0',  # No B-frames for sharper quality
+                    '-g', '12'   # Keyframe every second for consistency
                 ]
             ) as writer:
                 # Write original frames without interpolation to avoid artifacts
@@ -1126,12 +1133,15 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                     writer.append_data(frame)
             
             file_size = os.path.getsize(video_path)
-            logger.info("AI video generation completed", extra={
+            logger.info("Product-focused AI video generation completed", extra={
                 "video_filename": filename,
                 "file_size_bytes": file_size,
                 "file_size_mb": round(file_size / 1024 / 1024, 2),
                 "frames_generated": len(video_frames),
-                "output_fps": 15
+                "output_fps": 12,
+                "motion_intensity": motion_intensity,
+                "style": style,
+                "product_centered": True
             })
             
             # Schedule cleanup after 15 minutes
@@ -1222,36 +1232,32 @@ async def generate_video(data: VideoRequest):
             # Download image for AI generation
             image = download_image_from_url(data.image_url)
             
-            # Create model scene if requested
-            if data.use_model and image_pipeline:
-                logger.info("Creating model scene for product demonstration")
-                product_type = analyze_product_type(image)
-                image = create_model_scene(image, product_type)
-                logger.info("Model scene created", extra={"product_type": product_type})
-            elif data.use_model:
-                logger.warning("Model scene requested but image generation model not available")
+            # Focus on product-centered video generation (no model scenes)
+            logger.info("Creating product-focused video", extra={
+                "style": data.style,
+                "product_centered": True
+            })
             
-            # Create dramatic prompt based on style and text overlays
+            # Create product-focused prompts based on style
             prompt_parts = []
-            if data.use_model:
-                prompt_parts.append("Professional model demonstrating product")
-            
             if data.style == "dramatic":
-                prompt_parts.append("Dramatic cinematic transformation")
+                prompt_parts.append("Cinematic product showcase with dramatic lighting")
             elif data.style == "energetic":
-                prompt_parts.append("Dynamic energetic motion")
+                prompt_parts.append("Dynamic product presentation with vibrant energy")
             elif data.style == "smooth":
-                prompt_parts.append("Smooth professional showcase")
+                prompt_parts.append("Elegant smooth product showcase")
+            elif data.style == "product show":
+                prompt_parts.append("Professional product demonstration with perfect focus")
             else:
-                prompt_parts.append("Professional product presentation")
+                prompt_parts.append("Premium product presentation")
+            
+            # Add product-specific enhancements
+            prompt_parts.append("sharp product details, premium commercial quality")
             
             if data.text_overlay or data.brand_text:
-                prompt_parts.append("highlighting product features")
+                prompt_parts.append("clear branding elements")
             
-            if data.use_model:
-                prompt = ", ".join(prompt_parts) + " with lifestyle photography, professional model, commercial advertisement style"
-            else:
-                prompt = ", ".join(prompt_parts) + " with professional lighting and camera movement"
+            prompt = ", ".join(prompt_parts) + ", studio lighting, professional photography"
             
             # Convert duration to frames (assuming ~30fps source, 15fps output)
             duration_frames = max(15, min(60, data.duration * 5))  # 5 frames per second roughly
