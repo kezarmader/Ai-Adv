@@ -804,18 +804,42 @@ else:
                 low_cpu_mem_usage=True  # MEMORY FIX: Reduce CPU memory usage
             )
             
-            # MEMORY FIX: Enable all memory optimizations BEFORE moving to GPU
-            svd_pipeline.enable_model_cpu_offload()  # Keep models on CPU until needed
-            svd_pipeline.enable_vae_slicing()        # Process VAE in slices
-            svd_pipeline.enable_vae_tiling()         # Process VAE in tiles
+            # MEMORY FIX: Enable all memory optimizations BEFORE moving to GPU (with version compatibility)
+            try:
+                svd_pipeline.enable_model_cpu_offload()  # Keep models on CPU until needed
+                logger.info("Model CPU offload enabled")
+            except AttributeError:
+                logger.warning("enable_model_cpu_offload not available in this diffusers version")
+            
+            try:
+                svd_pipeline.enable_vae_slicing()        # Process VAE in slices
+                logger.info("VAE slicing enabled")
+            except AttributeError:
+                logger.warning("enable_vae_slicing not available in this diffusers version")
+            
+            try:
+                svd_pipeline.enable_vae_tiling()         # Process VAE in tiles
+                logger.info("VAE tiling enabled")
+            except AttributeError:
+                logger.warning("enable_vae_tiling not available in this diffusers version")
             
             # MEMORY FIX: Move to GPU with sequential loading
             if device == "cuda":
                 svd_pipeline = svd_pipeline.to(device)
                 torch.cuda.empty_cache()  # Clean up after GPU transfer
                 
+            # Check which optimizations are actually available
+            available_optimizations = ["low_cpu_mem_usage"]
+            if hasattr(svd_pipeline, 'enable_model_cpu_offload'):
+                available_optimizations.append("cpu_offload")
+            if hasattr(svd_pipeline, 'enable_vae_slicing'):
+                available_optimizations.append("vae_slicing")
+            if hasattr(svd_pipeline, 'enable_vae_tiling'):
+                available_optimizations.append("vae_tiling")
+            
             logger.info("Stable Video Diffusion model loaded with MEMORY OPTIMIZATION", extra={
-                "memory_optimizations": ["cpu_offload", "vae_slicing", "vae_tiling", "low_cpu_mem_usage"]
+                "memory_optimizations": available_optimizations,
+                "diffusers_version_compatible": len(available_optimizations) > 1
             })
             if device == "cuda":
                 log_gpu_usage(logger, "after_svd_loading_optimized")
