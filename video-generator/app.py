@@ -708,39 +708,14 @@ if device == "cuda":
     
     log_gpu_usage(logger, "before_model_loading")
 
-# Load CLIP for image understanding (lightweight, used for motion planning)
-try:
-    with TimingContext("clip_model_loading", logger):
-        clip_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        clip_model = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-        logger.info("CLIP model loaded successfully")
-except Exception as e:
-    logger.warning(f"Could not load CLIP model: {e}. Image analysis features will be limited.")
-    clip_processor = None
-    clip_model = None
+# MEMORY FIX: Disable CLIP model to save GPU memory for SVD
+logger.info("MEMORY OPTIMIZATION: Skipping CLIP model to reserve memory for SVD")
+clip_processor = None
+clip_model = None
 
-# Load image generation model for creating model scenes
-try:
-    with TimingContext("image_generation_model_loading", logger):
-        logger.info("Loading image generation model for product modeling...")
-        from diffusers import StableDiffusionXLPipeline
-        
-        # Use a lighter SDXL model for product modeling
-        image_pipeline = StableDiffusionXLPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-xl-base-1.0",
-            torch_dtype=torch.float16,
-            variant="fp16",
-            use_safetensors=True
-        ).to(device)
-        
-        # Enable memory efficient attention
-        image_pipeline.enable_model_cpu_offload()
-        image_pipeline.enable_vae_slicing()
-        
-        logger.info("Image generation model loaded successfully")
-except Exception as e:
-    logger.warning(f"Could not load image generation model: {e}. Product modeling features will be limited.")
-    image_pipeline = None
+# MEMORY FIX: Disable image generation model to save GPU memory for SVD
+logger.info("MEMORY OPTIMIZATION: Skipping image generation model to reserve memory for SVD")
+image_pipeline = None
 
 if device == "cuda":
     log_gpu_usage(logger, "after_clip_loading")
@@ -1145,7 +1120,7 @@ def generate_factual_use_case_prompt(product_info: dict, style: str) -> str:
     return final_prompt
 
 def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 40, style: str = "smooth", product_metadata: ProductMetadata = None) -> str:
-    """Generate AI video using Stable Video Diffusion - GPU ONLY"""
+    """Generate AI video using Stable Video Diffusion - GPU ONLY with AGGRESSIVE MEMORY MANAGEMENT"""
     
     # Strict requirements - no fallbacks
     if not SVD_AVAILABLE:
@@ -1156,6 +1131,14 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
     
     if device == "cpu":
         raise HTTPException(status_code=503, detail="GPU required for AI video generation - CPU not allowed")
+    
+    # AGGRESSIVE MEMORY CLEANUP before starting
+    if device == "cuda":
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        # Force garbage collection
+        import gc
+        gc.collect()
     
     try:
         with TimingContext("ai_video_generation", logger):
@@ -1169,14 +1152,14 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             original_width, original_height = image.size
             original_aspect = original_width / original_height
             
-            # PREMIUM QUALITY: Prioritize vertical format for mobile/Reels
-            # Force vertical orientation for maximum mobile compatibility and quality
-            if original_aspect > 1.5:  # Very wide - crop to vertical for mobile
-                target_size = (576, 1024)  # 9:16 - Premium mobile vertical
-            elif original_aspect > 1.0:  # Landscape - convert to square or vertical
-                target_size = (768, 768)   # 1:1 - Instagram square format
-            else:  # Portrait or square - optimize for vertical
-                target_size = (576, 1024)  # 9:16 - Premium mobile vertical (best for Reels)
+            # MEMORY-OPTIMIZED: Smaller resolutions to prevent OOM
+            # Use smaller sizes to reduce memory usage
+            if original_aspect > 1.5:  # Very wide - crop to smaller vertical
+                target_size = (512, 768)   # MEMORY FIX: Smaller 4:3 vertical
+            elif original_aspect > 1.0:  # Landscape - smaller square
+                target_size = (512, 512)   # MEMORY FIX: Smaller 1:1 square format
+            else:  # Portrait or square - smaller vertical
+                target_size = (512, 768)   # MEMORY FIX: Smaller 4:3 vertical
             
             # Extract factual product information from ASIN service metadata
             product_info = extract_product_info_from_metadata(product_metadata)
@@ -1401,8 +1384,8 @@ async def generate_video(data: VideoRequest):
             # The generate_ai_video_from_image function will analyze the product and create the prompt
             prompt = ""  # Empty prompt will trigger intelligent generation
             
-            # MEMORY-OPTIMIZED: Balanced duration for quality and memory efficiency
-            duration_frames = max(25, min(60, data.duration * 8))  # MEMORY FIX: ~8 frames per second for memory efficiency
+            # ULTRA MEMORY-OPTIMIZED: Shortest duration to prevent OOM
+            duration_frames = max(15, min(30, data.duration * 5))  # ULTRA MEMORY FIX: ~5 frames per second, max 30 frames
             
             filename = generate_ai_video_from_image(
                 image=image,

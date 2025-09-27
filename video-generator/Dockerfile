@@ -36,6 +36,11 @@ COPY . .
 # Create directories for videos and temp files
 RUN mkdir -p /app/videos /app/temp && chmod 755 /app/videos /app/temp
 
+# MEMORY OPTIMIZATION: Configure CUDA memory management for RTX 5090
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ENV CUDA_MEMORY_FRACTION=0.8
+ENV TORCH_CUDA_MEMORY_FRACTION=0.8
+
 # Optional debugging flags for RTX 5090 troubleshooting
 ENV CUDA_LAUNCH_BLOCKING=1
 ENV TORCH_USE_CUDA_DSA=1
