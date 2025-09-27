@@ -724,6 +724,21 @@ except Exception as e:
 if device == "cuda":
     log_gpu_usage(logger, "after_clip_loading")
 
+def _enhance_for_svd(image: Image.Image) -> Image.Image:
+    """Enhance image quality specifically for better SVD video generation"""
+    # Enhance contrast and sharpness to preserve product details
+    enhancer = ImageEnhance.Contrast(image)
+    image = enhancer.enhance(1.1)  # Slight contrast boost
+    
+    enhancer = ImageEnhance.Sharpness(image)
+    image = enhancer.enhance(1.2)  # Moderate sharpness boost
+    
+    # Slightly enhance color saturation for better visual appeal
+    enhancer = ImageEnhance.Color(image)
+    image = enhancer.enhance(1.05)  # Very subtle color boost
+    
+    return image
+
 def _resize_with_smart_crop(image: Image.Image, target_size: tuple) -> Image.Image:
     """Resize image to target size using intelligent cropping to preserve important content"""
     target_width, target_height = target_size
@@ -1010,7 +1025,7 @@ def composite_product_into_scene(scene: Image.Image, product: Image.Image, produ
         # Return the scene without product overlay
         return scene
 
-def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 25) -> str:
+def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 25, style: str = "smooth") -> str:
     """Generate AI video using Stable Video Diffusion - GPU ONLY"""
     
     # Strict requirements - no fallbacks
@@ -1046,23 +1061,37 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             # Resize with smart cropping to preserve content quality
             image_resized = _resize_with_smart_crop(image, target_size)
             
-            logger.info("Image resized for SVD", extra={
+            # Enhance image quality for better SVD results
+            image_resized = _enhance_for_svd(image_resized)
+            
+            logger.info("Image resized and enhanced for SVD", extra={
                 "original_size": image.size,
                 "original_aspect": f"{original_aspect:.3f}",
                 "target_size": target_size,
                 "target_aspect": f"{target_size[0]/target_size[1]:.3f}"
             })
             
-            # Generate video frames using SVD
+            # Determine motion intensity based on style for product videos
+            style_motion_map = {
+                "smooth": 30,      # Very gentle motion
+                "gentle": 35,      # Slightly more motion  
+                "dramatic": 60,    # Moderate motion for drama
+                "energetic": 70,   # More motion but still controlled
+                "product show": 25 # Minimal motion for product focus
+            }
+            
+            motion_intensity = style_motion_map.get(style, 40)  # Default conservative
+            
+            # Generate video frames using SVD with optimized settings for product videos
             with torch.no_grad():
                 frames = svd_pipeline(
                     image=image_resized,
                     height=target_size[1],
                     width=target_size[0],
                     num_frames=duration_frames,
-                    motion_bucket_id=127,  # Controls motion intensity (1-255)
+                    motion_bucket_id=motion_intensity,  # Style-based motion control
                     fps=7,  # SVD works best at 7 FPS
-                    noise_aug_strength=0.1,  # Slight noise for variation
+                    noise_aug_strength=0.02,  # Minimal noise to preserve product details
                     decode_chunk_size=8,  # Memory optimization
                 ).frames[0]
             
@@ -1077,25 +1106,24 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             filename = f"{uuid.uuid4()}.mp4"
             video_path = os.path.join(VIDEOS_DIR, filename)
             
-            # Use imageio to save with better quality
+            # Use imageio to save with optimized quality for product videos
             with imageio.get_writer(
                 video_path, 
-                fps=15,  # Upsampled from 7 FPS for smoother playback
+                fps=10,  # Slower FPS for smoother motion, less jarring
                 codec='libx264',
                 output_params=[
                     '-pix_fmt', 'yuv420p',
                     '-profile:v', 'high', 
                     '-level', '4.0',
-                    '-crf', '18',  # High quality
-                    '-preset', 'slow'  # Better compression
+                    '-crf', '15',  # Even higher quality to preserve product details
+                    '-preset', 'slower',  # Best compression for quality
+                    '-tune', 'stillimage',  # Optimize for product/still image content
+                    '-movflags', '+faststart'  # Web optimization
                 ]
             ) as writer:
-                # Interpolate frames for smoother playback
-                for i, frame in enumerate(video_frames):
+                # Write original frames without interpolation to avoid artifacts
+                for frame in video_frames:
                     writer.append_data(frame)
-                    # Add interpolated frame (simple duplication for now)
-                    if i < len(video_frames) - 1:
-                        writer.append_data(frame)
             
             file_size = os.path.getsize(video_path)
             logger.info("AI video generation completed", extra={
@@ -1231,7 +1259,8 @@ async def generate_video(data: VideoRequest):
             filename = generate_ai_video_from_image(
                 image=image,
                 prompt=prompt,
-                duration_frames=duration_frames
+                duration_frames=duration_frames,
+                style=data.style
             )
             
             return {
