@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install system dependencies for Linux deployment
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libsm6 \
@@ -10,7 +10,10 @@ RUN apt-get update && apt-get install -y \
     libfontconfig1 \
     fonts-dejavu-core \
     git \
-    && rm -rf /var/lib/apt/lists/*
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Set working directory
 WORKDIR /app
@@ -18,8 +21,8 @@ WORKDIR /app
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 
-# Install nightly PyTorch with CUDA 12.8 support for RTX 5090
-RUN pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
+# Install PyTorch nightly with CUDA 12.6 for RTX 5090 Blackwell architecture support
+RUN pip install --no-cache-dir --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126
 
 # Install other requirements
 RUN pip install --no-cache-dir -r requirements.txt
