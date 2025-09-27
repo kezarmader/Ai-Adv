@@ -1143,7 +1143,7 @@ def generate_factual_use_case_prompt(product_info: dict, style: str) -> str:
     
     return final_prompt
 
-def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 40, style: str = "smooth", product_metadata: ProductMetadata = None) -> str:
+def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 40, style: str = "smooth", product_metadata: ProductMetadata = None, target_duration_seconds: int = 8) -> str:
     """Generate AI video using Stable Video Diffusion - GPU ONLY with AGGRESSIVE MEMORY MANAGEMENT"""
     
     # Strict requirements - no fallbacks
@@ -1214,7 +1214,7 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                 "product_info": product_info
             })
             
-            # PREMIUM MOTION: Optimized for engaging mobile Reels
+            # PREMIUM MOTION: Optimized for engaging mobile Reels with use case awareness
             style_motion_map = {
                 "smooth": 45,        # Smooth, engaging motion for mobile viewing
                 "gentle": 35,        # Gentle but noticeable motion for Reels
@@ -1223,7 +1223,36 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                 "product show": 40   # Professional but engaging motion for product focus
             }
             
-            motion_intensity = style_motion_map.get(style, 40)  # Default engaging for mobile
+            base_motion_intensity = style_motion_map.get(style, 40)  # Default engaging for mobile
+            
+            # Enhance motion based on product use case and category from ASIN data
+            use_case = product_info.get("use_case", "").lower()
+            category = product_info.get("category", "").lower()
+            product_type = product_info.get("type", "").lower()
+            
+            # Adjust motion intensity based on factual product information
+            motion_adjustment = 0
+            if "fitness" in use_case or "sports" in category or "workout" in use_case:
+                motion_adjustment += 15  # More dynamic for fitness products
+            elif "beauty" in category or "skincare" in use_case or "cosmetic" in product_type:
+                motion_adjustment += 10  # Elegant motion for beauty products
+            elif "tech" in category or "electronic" in product_type:
+                motion_adjustment += 8   # Modern motion for tech products
+            elif "luxury" in use_case or "premium" in product_info.get("brand", "").lower():
+                motion_adjustment += 12  # Sophisticated motion for luxury
+            elif "wellness" in use_case or "health" in category:
+                motion_adjustment -= 5   # Calmer motion for wellness
+            
+            motion_intensity = min(127, base_motion_intensity + motion_adjustment)  # SVD max is 127
+            
+            logger.info("Motion intensity calculated from use case", extra={
+                "base_intensity": base_motion_intensity,
+                "use_case": use_case,
+                "category": category, 
+                "product_type": product_type,
+                "adjustment": motion_adjustment,
+                "final_intensity": motion_intensity
+            })
             
             # MEMORY-OPTIMIZED SVD GENERATION: Balance quality and memory usage
             # Clear GPU cache before generation
@@ -1231,16 +1260,18 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
             
+            # Generate with proper frame count and timing
+            actual_svd_fps = 8  # SVD's actual generation rate
             with torch.no_grad():
                 frames = svd_pipeline(
                     image=image_resized,
                     height=target_size[1],
                     width=target_size[0],
                     num_frames=duration_frames,
-                    motion_bucket_id=motion_intensity,  # Engaging motion for mobile
-                    fps=7,  # SVD's optimal generation FPS
-                    noise_aug_strength=0.02,  # MEMORY FIX: Slightly higher noise for less memory
-                    decode_chunk_size=2,  # MEMORY FIX: Larger chunks to reduce memory fragmentation
+                    motion_bucket_id=motion_intensity,  # Engaging motion for mobile based on use case
+                    fps=actual_svd_fps,  # Proper SVD generation FPS
+                    noise_aug_strength=0.02,  # Balanced noise for quality
+                    decode_chunk_size=4,  # Optimized chunk size for memory efficiency
                     num_videos_per_prompt=1,  # Generate single high-quality video
                     generator=torch.Generator().manual_seed(42)  # Consistent quality
                 ).frames[0]
@@ -1260,10 +1291,14 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             filename = f"{uuid.uuid4()}.mp4"
             video_path = os.path.join(VIDEOS_DIR, filename)
             
-            # PREMIUM ENCODING: Maximum quality for mobile Reels - time and memory intensive
+            # Calculate proper output FPS to match desired duration
+            # SVD generates frames at actual_svd_fps, we want smooth playback matching intended duration
+            target_output_fps = max(8, min(24, len(video_frames) / max(1, target_duration_seconds)))  # Smooth mobile FPS
+            
+            # PREMIUM ENCODING: Maximum quality for mobile Reels with proper timing
             with imageio.get_writer(
                 video_path, 
-                fps=30,  # High FPS for ultra-smooth mobile playback
+                fps=target_output_fps,  # Proper FPS to match intended duration
                 codec='libx264',
                 output_params=[
                     '-pix_fmt', 'yuv420p',
@@ -1274,7 +1309,7 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                     '-tune', 'stillimage',  # Optimize for product content
                     '-movflags', '+faststart',  # Mobile/web optimization
                     '-bf', '3',  # More B-frames for better compression
-                    '-g', '30',  # Keyframe every second at 30fps
+                    '-g', str(int(target_output_fps)),  # Keyframe every second at target fps
                     '-maxrate', '25M',  # PREMIUM: Very high bitrate for mobile quality
                     '-bufsize', '50M',  # Large buffer for consistent premium quality
                     '-refs', '6',  # More reference frames for better quality
@@ -1290,12 +1325,14 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                     writer.append_data(frame)
             
             file_size = os.path.getsize(video_path)
+            actual_video_duration = len(video_frames) / target_output_fps
             logger.info("PREMIUM mobile Reels video generation completed", extra={
                 "video_filename": filename,
                 "file_size_bytes": file_size,
                 "file_size_mb": round(file_size / 1024 / 1024, 2),
                 "frames_generated": len(video_frames),
-                "output_fps": 30,  # Premium 30fps
+                "output_fps": round(target_output_fps, 1),
+                "video_duration_seconds": round(actual_video_duration, 2),
                 "motion_intensity": motion_intensity,
                 "style": style,
                 "product_type": product_info.get("type", "unknown"),
@@ -1306,7 +1343,8 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                 "quality_mode": "premium_maximum",
                 "encoding_preset": "veryslow_premium",
                 "intelligent_prompting": True,
-                "mobile_optimized": True
+                "mobile_optimized": True,
+                "use_case_motion_enhanced": True
             })
             
             # Schedule cleanup after 15 minutes
@@ -1408,15 +1446,17 @@ async def generate_video(data: VideoRequest):
             # The generate_ai_video_from_image function will analyze the product and create the prompt
             prompt = ""  # Empty prompt will trigger intelligent generation
             
-            # ULTRA MEMORY-OPTIMIZED: Shortest duration to prevent OOM
-            duration_frames = max(15, min(30, data.duration * 5))  # ULTRA MEMORY FIX: ~5 frames per second, max 30 frames
+            # BALANCED MEMORY-OPTIMIZED: Proper duration while managing memory
+            # SVD generates at ~7-8fps, so we need more frames for desired duration
+            duration_frames = max(25, min(120, data.duration * 15))  # Proper frame count for SVD generation
             
             filename = generate_ai_video_from_image(
                 image=image,
                 prompt=prompt,
                 duration_frames=duration_frames,
                 style=data.style,
-                product_metadata=data.product_metadata
+                product_metadata=data.product_metadata,
+                target_duration_seconds=data.duration
             )
             
             return {
@@ -1482,7 +1522,8 @@ async def generate_video_from_upload(
         filename = generate_ai_video_from_image(
             image=image,
             prompt=prompt,
-            duration_frames=duration_frames
+            duration_frames=duration_frames,
+            target_duration_seconds=max(5, duration_frames // 8)  # Estimate duration from frames
         )
         
         return {
@@ -1517,7 +1558,8 @@ async def generate_ai_video(request: AIVideoRequest):
             image=image, 
             prompt=request.prompt, 
             duration_frames=request.duration_frames,
-            product_metadata=request.product_metadata
+            product_metadata=request.product_metadata,
+            target_duration_seconds=max(5, request.duration_frames // 8)  # Estimate duration from frames
         )
         
         return {
