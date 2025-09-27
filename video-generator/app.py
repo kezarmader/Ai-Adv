@@ -700,6 +700,35 @@ except Exception as e:
 if device == "cuda":
     log_gpu_usage(logger, "after_clip_loading")
 
+def _resize_with_padding(image: Image.Image, target_size: tuple) -> Image.Image:
+    """Resize image to target size while preserving aspect ratio using padding"""
+    target_width, target_height = target_size
+    original_width, original_height = image.size
+    
+    # Calculate scaling factor to fit image within target dimensions
+    scale_width = target_width / original_width
+    scale_height = target_height / original_height
+    scale = min(scale_width, scale_height)
+    
+    # Calculate new dimensions
+    new_width = int(original_width * scale)
+    new_height = int(original_height * scale)
+    
+    # Resize image
+    resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    
+    # Create new image with target dimensions and black background
+    padded_image = Image.new('RGB', target_size, (0, 0, 0))
+    
+    # Calculate position to center the resized image
+    x_offset = (target_width - new_width) // 2
+    y_offset = (target_height - new_height) // 2
+    
+    # Paste resized image onto padded background
+    padded_image.paste(resized_image, (x_offset, y_offset))
+    
+    return padded_image
+
 # Load Stable Video Diffusion with nightly PyTorch
 svd_pipeline = None
 if not SVD_AVAILABLE:
@@ -809,9 +838,29 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                 "input_image_size": image.size
             })
             
-            # Resize image for SVD (typically requires specific dimensions)
-            target_size = (1024, 576)  # SVD's preferred aspect ratio
-            image_resized = image.resize(target_size, Image.Resampling.LANCZOS)
+            # Smart resize for SVD while preserving aspect ratio
+            original_width, original_height = image.size
+            original_aspect = original_width / original_height
+            
+            # SVD works best with these dimensions (multiple of 64)
+            if original_aspect > 1.5:  # Wide landscape
+                target_size = (1024, 576)  # 16:9
+            elif original_aspect > 1.0:  # Mild landscape
+                target_size = (768, 576)   # 4:3
+            elif original_aspect > 0.7:  # Portrait
+                target_size = (576, 768)   # 3:4
+            else:  # Very tall portrait
+                target_size = (576, 1024)  # 9:16
+            
+            # Resize with padding to avoid distortion
+            image_resized = _resize_with_padding(image, target_size)
+            
+            logger.info("Image resized for SVD", extra={
+                "original_size": image.size,
+                "original_aspect": f"{original_aspect:.3f}",
+                "target_size": target_size,
+                "target_aspect": f"{target_size[0]/target_size[1]:.3f}"
+            })
             
             # Generate video frames using SVD
             with torch.no_grad():
