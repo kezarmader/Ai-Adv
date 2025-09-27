@@ -18,8 +18,8 @@ WORKDIR /app
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 
-# Install PyTorch with CUDA support - using stable versions
-RUN pip install --no-cache-dir torch==2.1.2+cu121 torchvision==0.16.2+cu121 --index-url https://download.pytorch.org/whl/cu121
+# Install nightly PyTorch with CUDA 12.8 support for RTX 5090
+RUN pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Install other requirements
 RUN pip install --no-cache-dir -r requirements.txt

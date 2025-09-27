@@ -700,14 +700,18 @@ except Exception as e:
 if device == "cuda":
     log_gpu_usage(logger, "after_clip_loading")
 
-# Load Stable Video Diffusion for AI video generation
+# Load Stable Video Diffusion with nightly PyTorch
 svd_pipeline = None
 if not SVD_AVAILABLE:
-    logger.warning("StableVideoDiffusionPipeline not available in this diffusers version. Please upgrade diffusers to >=0.24.0")
+    logger.warning("StableVideoDiffusionPipeline not available - check diffusers version")
 else:
     try:
         with TimingContext("svd_model_loading", logger):
-            logger.info("Loading Stable Video Diffusion model...")
+            logger.info("Loading Stable Video Diffusion model with nightly PyTorch...", extra={
+                "pytorch_version": "nightly",
+                "cuda_version": "12.8",
+                "diffusers_available": SVD_AVAILABLE
+            })
             svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
                 "stabilityai/stable-video-diffusion-img2vid-xt",
                 torch_dtype=torch.float16,
@@ -717,7 +721,7 @@ else:
             if device == "cuda":
                 log_gpu_usage(logger, "after_svd_loading")
     except Exception as e:
-        logger.error(f"Failed to load SVD model: {e}. AI video generation will not be available.")
+        logger.error(f"Failed to load SVD model: {e}. Check GPU compatibility and model availability.")
         svd_pipeline = None
 
 # Animation engines not needed - using pure AI generation
