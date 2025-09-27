@@ -99,10 +99,21 @@ DEFAULT_DURATION = 5  # seconds
 DEFAULT_WIDTH = 1024
 DEFAULT_HEIGHT = 1024
 
+class ProductMetadata(BaseModel):
+    """Factual product data from ASIN service"""
+    product_title: Optional[str] = None
+    category: Optional[str] = None
+    brand: Optional[str] = None
+    product_type: Optional[str] = None
+    features: Optional[List[str]] = None
+    use_case: Optional[str] = None
+    target_audience: Optional[str] = None
+    keywords: Optional[List[str]] = None
+
 class VideoRequest(BaseModel):
     image_url: Optional[str] = None
     animation_type: str = "zoom_pan"  # zoom_pan, fade_effects, parallax, ken_burns
-    duration: int = 5  # seconds
+    duration: int = 8  # PREMIUM: Longer duration for mobile Reels (8-15 seconds optimal)
     fps: int = 30
     audio_prompt: Optional[str] = None
     style: str = "smooth"  # smooth, dramatic, gentle, energetic
@@ -110,11 +121,13 @@ class VideoRequest(BaseModel):
     brand_text: Optional[str] = None
     cta_text: Optional[str] = None
     use_model: bool = False  # Whether to create a model scene first (disabled for better quality)
+    product_metadata: Optional[ProductMetadata] = None  # Factual product data from ASIN service
 
 class AIVideoRequest(BaseModel):
     image_url: str
     prompt: str = "dramatic transformation with dynamic motion"
-    duration_frames: int = 25  # SVD works with frames, not seconds
+    duration_frames: int = 60  # PREMIUM: Longer videos for high-quality mobile Reels
+    product_metadata: Optional[ProductMetadata] = None  # Factual product data from ASIN service
 
 class AIVideoAnimationEngine:
     """AI-powered video animation engine using CLIP for motion understanding"""
@@ -725,22 +738,25 @@ if device == "cuda":
     log_gpu_usage(logger, "after_clip_loading")
 
 def _enhance_for_svd(image: Image.Image) -> Image.Image:
-    """Enhance image quality specifically for product-focused SVD video generation"""
-    # Strong contrast enhancement to make product pop
+    """PREMIUM ENHANCEMENT: Maximum quality enhancement for mobile Reels"""
+    # PREMIUM: Strong contrast for mobile screen visibility
     enhancer = ImageEnhance.Contrast(image)
-    image = enhancer.enhance(1.25)  # Stronger contrast for product clarity
+    image = enhancer.enhance(1.35)  # Higher contrast for mobile screens
     
-    # Enhanced sharpness to preserve crisp product details
+    # PREMIUM: Maximum sharpness for crystal clear product details
     enhancer = ImageEnhance.Sharpness(image)
-    image = enhancer.enhance(1.4)  # Higher sharpness for product definition
+    image = enhancer.enhance(1.6)  # Very high sharpness for mobile clarity
     
-    # Enhanced color saturation for vibrant product colors
+    # PREMIUM: Vibrant colors that pop on mobile screens
     enhancer = ImageEnhance.Color(image)
-    image = enhancer.enhance(1.15)  # More color enhancement for product appeal
+    image = enhancer.enhance(1.25)  # Strong color enhancement for mobile impact
     
-    # Slight brightness adjustment for better visibility
+    # PREMIUM: Optimized brightness for mobile viewing
     enhancer = ImageEnhance.Brightness(image)
-    image = enhancer.enhance(1.05)  # Subtle brightness boost
+    image = enhancer.enhance(1.08)  # Brighter for mobile screens
+    
+    # PREMIUM: Apply slight unsharp mask effect for even more detail
+    image = image.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=2))
     
     return image
 
@@ -869,34 +885,34 @@ def download_image_from_url(image_url: str) -> Image.Image:
         })
         raise HTTPException(status_code=400, detail=f"Error downloading image: {str(e)}")
 
-def analyze_product_type(image: Image.Image) -> str:
-    """Analyze product type to determine appropriate model scenario"""
-    # Simple heuristic based on image characteristics
-    # In production, this could use a trained classifier
+def extract_product_info_from_metadata(metadata: ProductMetadata) -> dict:
+    """Extract factual product information from ASIN service metadata"""
     
-    width, height = image.size
-    aspect_ratio = width / height
+    if not metadata:
+        # Fallback minimal info when no metadata provided
+        return {
+            "type": "product",
+            "use_case": "general product showcase", 
+            "context": "professional presentation",
+            "brand": "premium brand",
+            "category": "lifestyle product",
+            "target_audience": "consumers"
+        }
     
-    # Convert to numpy for basic analysis
-    img_array = np.array(image)
+    # Use factual data from ASIN service
+    product_info = {
+        "type": metadata.product_type or "product",
+        "use_case": metadata.use_case or "product demonstration",
+        "context": f"{metadata.category or 'lifestyle'} focused presentation",
+        "brand": metadata.brand or "premium brand",
+        "category": metadata.category or "consumer product",
+        "target_audience": metadata.target_audience or "consumers",
+        "title": metadata.product_title or "product",
+        "features": metadata.features or [],
+        "keywords": metadata.keywords or []
+    }
     
-    # Analyze colors to guess product type
-    avg_colors = np.mean(img_array, axis=(0, 1))
-    brightness = np.mean(avg_colors)
-    
-    # Simple product categorization logic
-    if aspect_ratio < 0.7:  # Tall products
-        if brightness > 200:  # Light colors
-            return "skincare"
-        else:
-            return "bottle"
-    elif aspect_ratio > 1.5:  # Wide products
-        return "tech"
-    else:  # Square-ish products
-        if brightness > 180:
-            return "cosmetics"
-        else:
-            return "accessory"
+    return product_info
 
 def create_model_scene(product_image: Image.Image, product_type: str) -> Image.Image:
     """Create a lifestyle scene with a model using/demonstrating the product"""
@@ -1030,7 +1046,75 @@ def composite_product_into_scene(scene: Image.Image, product: Image.Image, produ
         # Return the scene without product overlay
         return scene
 
-def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 25, style: str = "smooth") -> str:
+def generate_factual_use_case_prompt(product_info: dict, style: str) -> str:
+    """Generate intelligent prompts based on FACTUAL product data from ASIN service"""
+    
+    # Extract factual data
+    product_type = product_info.get("type", "product")
+    use_case = product_info.get("use_case", "product demonstration")
+    context = product_info.get("context", "professional presentation")
+    brand = product_info.get("brand", "premium brand")
+    category = product_info.get("category", "consumer product")
+    target_audience = product_info.get("target_audience", "consumers")
+    title = product_info.get("title", "product")
+    features = product_info.get("features", [])
+    keywords = product_info.get("keywords", [])
+    
+    # Build factual prompt components
+    main_components = []
+    
+    # Primary product showcase
+    if brand and brand != "premium brand":
+        main_components.append(f"Professional {brand} {product_type} showcase")
+    else:
+        main_components.append(f"Professional {product_type} demonstration")
+    
+    # Add specific use case from ASIN data
+    if use_case and use_case != "product demonstration":
+        main_components.append(f"highlighting {use_case}")
+    
+    # Add category context
+    if category and category != "consumer product":
+        main_components.append(f"in {category} market context")
+    
+    # Add key features if available
+    if features:
+        key_features = ", ".join(features[:3])  # Use top 3 features
+        main_components.append(f"emphasizing {key_features}")
+    
+    # Add target audience context
+    if target_audience and target_audience != "consumers":
+        main_components.append(f"designed for {target_audience}")
+    
+    # Combine main components
+    main_prompt = " ".join(main_components)
+    
+    # PREMIUM: Mobile Reels-optimized style enhancements
+    style_enhancements = {
+        "smooth": "with smooth, flowing camera movements optimized for mobile viewing and social media engagement",
+        "dramatic": "with dramatic lighting, bold shadows, and cinematic appeal perfect for viral mobile content", 
+        "energetic": "with dynamic motion, vibrant energy, and high-impact presentation designed for mobile screens",
+        "gentle": "with soft, calming movements and peaceful atmosphere ideal for wellness and lifestyle content",
+        "product show": "with professional studio lighting, precise product focus, and premium commercial quality for mobile advertising"
+    }
+    
+    style_enhancement = style_enhancements.get(style, style_enhancements["smooth"])
+    
+    # Add keywords for better context if available
+    keyword_context = ""
+    if keywords:
+        relevant_keywords = ", ".join(keywords[:3])  # Use top 3 keywords
+        keyword_context = f", featuring {relevant_keywords}"
+    
+    # PREMIUM: Mobile Reels quality specifications
+    quality_spec = "ultra-high definition mobile-optimized quality, perfect for Instagram Reels and TikTok, crystal clear product visibility with enhanced mobile contrast and sharpness"
+    
+    # Combine everything factually
+    final_prompt = f"{main_prompt} {style_enhancement}{keyword_context}, {quality_spec}, premium studio lighting, professional mobile cinematography, vertical format optimization, social media ready"
+    
+    return final_prompt
+
+def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 40, style: str = "smooth", product_metadata: ProductMetadata = None) -> str:
     """Generate AI video using Stable Video Diffusion - GPU ONLY"""
     
     # Strict requirements - no fallbacks
@@ -1055,13 +1139,29 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             original_width, original_height = image.size
             original_aspect = original_width / original_height
             
-            # Use SVD's optimal dimensions (must be multiple of 64 for best results)
-            if original_aspect > 1.2:  # Landscape
-                target_size = (1024, 576)  # 16:9 - SVD's preferred landscape
-            elif original_aspect > 0.8:  # Square-ish
-                target_size = (768, 768)   # 1:1 - Good for product shots
-            else:  # Portrait
-                target_size = (576, 1024)  # 9:16 - Mobile-friendly portrait
+            # PREMIUM QUALITY: Prioritize vertical format for mobile/Reels
+            # Force vertical orientation for maximum mobile compatibility and quality
+            if original_aspect > 1.5:  # Very wide - crop to vertical for mobile
+                target_size = (576, 1024)  # 9:16 - Premium mobile vertical
+            elif original_aspect > 1.0:  # Landscape - convert to square or vertical
+                target_size = (768, 768)   # 1:1 - Instagram square format
+            else:  # Portrait or square - optimize for vertical
+                target_size = (576, 1024)  # 9:16 - Premium mobile vertical (best for Reels)
+            
+            # Extract factual product information from ASIN service metadata
+            product_info = extract_product_info_from_metadata(product_metadata)
+            
+            # Generate intelligent prompt if none provided
+            if not prompt or prompt == "dramatic transformation with dynamic motion":
+                prompt = generate_factual_use_case_prompt(product_info, style)
+                logger.info("Generated factual use case prompt from ASIN data", extra={
+                    "product_type": product_info.get("type"),
+                    "use_case": product_info.get("use_case"),
+                    "brand": product_info.get("brand"),
+                    "category": product_info.get("category"),
+                    "has_metadata": bool(product_metadata),
+                    "generated_prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt
+                })
             
             # Resize with smart cropping to preserve content quality
             image_resized = _resize_with_smart_crop(image, target_size)
@@ -1073,31 +1173,34 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                 "original_size": image.size,
                 "original_aspect": f"{original_aspect:.3f}",
                 "target_size": target_size,
-                "target_aspect": f"{target_size[0]/target_size[1]:.3f}"
+                "target_aspect": f"{target_size[0]/target_size[1]:.3f}",
+                "product_info": product_info
             })
             
-            # Determine motion intensity based on style - optimized for product focus
+            # PREMIUM MOTION: Optimized for engaging mobile Reels
             style_motion_map = {
-                "smooth": 20,        # Very gentle motion
-                "gentle": 25,        # Slightly more motion  
-                "dramatic": 45,      # Moderate motion for drama
-                "energetic": 55,     # More motion but controlled
-                "product show": 15   # Ultra-minimal motion for sharp product focus
+                "smooth": 45,        # Smooth, engaging motion for mobile viewing
+                "gentle": 35,        # Gentle but noticeable motion for Reels
+                "dramatic": 75,      # Bold dramatic motion for viral potential
+                "energetic": 85,     # High-energy motion for active products
+                "product show": 40   # Professional but engaging motion for product focus
             }
             
-            motion_intensity = style_motion_map.get(style, 25)  # Default very conservative
+            motion_intensity = style_motion_map.get(style, 40)  # Default engaging for mobile
             
-            # Generate video frames using SVD with optimized settings for product videos
+            # PREMIUM SVD GENERATION: Maximum quality settings for mobile Reels
             with torch.no_grad():
                 frames = svd_pipeline(
                     image=image_resized,
                     height=target_size[1],
                     width=target_size[0],
                     num_frames=duration_frames,
-                    motion_bucket_id=motion_intensity,  # Style-based motion control
-                    fps=7,  # SVD works best at 7 FPS
-                    noise_aug_strength=0.02,  # Minimal noise to preserve product details
-                    decode_chunk_size=8,  # Memory optimization
+                    motion_bucket_id=motion_intensity,  # Engaging motion for mobile
+                    fps=7,  # SVD's optimal generation FPS
+                    noise_aug_strength=0.01,  # PREMIUM: Minimal noise for crystal clarity
+                    decode_chunk_size=4,  # PREMIUM: Smaller chunks for maximum quality (uses more memory)
+                    num_videos_per_prompt=1,  # Generate single high-quality video
+                    generator=torch.Generator().manual_seed(42)  # Consistent quality
                 ).frames[0]
             
             # Convert frames to numpy arrays
@@ -1111,21 +1214,29 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             filename = f"{uuid.uuid4()}.mp4"
             video_path = os.path.join(VIDEOS_DIR, filename)
             
-            # Use imageio to save with optimized quality for product showcase videos
+            # PREMIUM ENCODING: Maximum quality for mobile Reels - time and memory intensive
             with imageio.get_writer(
                 video_path, 
-                fps=12,  # Slightly higher FPS for smooth product showcase
+                fps=30,  # High FPS for ultra-smooth mobile playback
                 codec='libx264',
                 output_params=[
                     '-pix_fmt', 'yuv420p',
                     '-profile:v', 'high', 
-                    '-level', '4.2',
-                    '-crf', '12',  # Ultra-high quality for sharp product details
-                    '-preset', 'slower',  # Best compression for quality
-                    '-tune', 'stillimage',  # Optimize for product/still image content
-                    '-movflags', '+faststart',  # Web optimization
-                    '-bf', '0',  # No B-frames for sharper quality
-                    '-g', '12'   # Keyframe every second for consistency
+                    '-level', '5.1',  # Higher level for better quality
+                    '-crf', '8',   # PREMIUM: Near-lossless quality (8-12 is visually lossless)
+                    '-preset', 'veryslow',  # PREMIUM: Maximum compression efficiency (takes more time)
+                    '-tune', 'stillimage',  # Optimize for product content
+                    '-movflags', '+faststart',  # Mobile/web optimization
+                    '-bf', '3',  # More B-frames for better compression
+                    '-g', '30',  # Keyframe every second at 30fps
+                    '-maxrate', '25M',  # PREMIUM: Very high bitrate for mobile quality
+                    '-bufsize', '50M',  # Large buffer for consistent premium quality
+                    '-refs', '6',  # More reference frames for better quality
+                    '-me_method', 'umh',  # Better motion estimation
+                    '-subq', '10',  # Maximum subpixel motion estimation
+                    '-trellis', '2',  # Maximum trellis quantization
+                    '-aq-mode', '3',  # Advanced adaptive quantization
+                    '-psy-rd', '1.0:0.15'  # Psychovisual optimizations for mobile screens
                 ]
             ) as writer:
                 # Write original frames without interpolation to avoid artifacts
@@ -1133,15 +1244,23 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                     writer.append_data(frame)
             
             file_size = os.path.getsize(video_path)
-            logger.info("Product-focused AI video generation completed", extra={
+            logger.info("PREMIUM mobile Reels video generation completed", extra={
                 "video_filename": filename,
                 "file_size_bytes": file_size,
                 "file_size_mb": round(file_size / 1024 / 1024, 2),
                 "frames_generated": len(video_frames),
-                "output_fps": 12,
+                "output_fps": 30,  # Premium 30fps
                 "motion_intensity": motion_intensity,
                 "style": style,
-                "product_centered": True
+                "product_type": product_info.get("type", "unknown"),
+                "use_case": product_info.get("use_case", "unknown"),
+                "brand": product_info.get("brand", "unknown"),
+                "category": product_info.get("category", "unknown"),
+                "target_format": "mobile_reels_vertical",
+                "quality_mode": "premium_maximum",
+                "encoding_preset": "veryslow_premium",
+                "intelligent_prompting": True,
+                "mobile_optimized": True
             })
             
             # Schedule cleanup after 15 minutes
@@ -1232,41 +1351,26 @@ async def generate_video(data: VideoRequest):
             # Download image for AI generation
             image = download_image_from_url(data.image_url)
             
-            # Focus on product-centered video generation (no model scenes)
-            logger.info("Creating product-focused video", extra={
+            # Focus on product-centered video generation with intelligent use case detection
+            logger.info("Creating intelligent product-focused video", extra={
                 "style": data.style,
-                "product_centered": True
+                "product_centered": True,
+                "intelligent_prompting": True
             })
             
-            # Create product-focused prompts based on style
-            prompt_parts = []
-            if data.style == "dramatic":
-                prompt_parts.append("Cinematic product showcase with dramatic lighting")
-            elif data.style == "energetic":
-                prompt_parts.append("Dynamic product presentation with vibrant energy")
-            elif data.style == "smooth":
-                prompt_parts.append("Elegant smooth product showcase")
-            elif data.style == "product show":
-                prompt_parts.append("Professional product demonstration with perfect focus")
-            else:
-                prompt_parts.append("Premium product presentation")
+            # Let the AI generate an intelligent prompt based on product analysis
+            # The generate_ai_video_from_image function will analyze the product and create the prompt
+            prompt = ""  # Empty prompt will trigger intelligent generation
             
-            # Add product-specific enhancements
-            prompt_parts.append("sharp product details, premium commercial quality")
-            
-            if data.text_overlay or data.brand_text:
-                prompt_parts.append("clear branding elements")
-            
-            prompt = ", ".join(prompt_parts) + ", studio lighting, professional photography"
-            
-            # Convert duration to frames (assuming ~30fps source, 15fps output)
-            duration_frames = max(15, min(60, data.duration * 5))  # 5 frames per second roughly
+            # PREMIUM QUALITY: Longer duration for high-quality Reels (15-30 seconds optimal)
+            duration_frames = max(40, min(120, data.duration * 12))  # ~12 frames per second for premium longer videos
             
             filename = generate_ai_video_from_image(
                 image=image,
                 prompt=prompt,
                 duration_frames=duration_frames,
-                style=data.style
+                style=data.style,
+                product_metadata=data.product_metadata
             )
             
             return {
@@ -1366,7 +1470,8 @@ async def generate_ai_video(request: AIVideoRequest):
         filename = generate_ai_video_from_image(
             image=image, 
             prompt=request.prompt, 
-            duration_frames=request.duration_frames
+            duration_frames=request.duration_frames,
+            product_metadata=request.product_metadata
         )
         
         return {
