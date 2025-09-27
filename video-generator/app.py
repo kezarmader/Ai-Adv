@@ -785,14 +785,17 @@ def download_image_from_url(image_url: str) -> Image.Image:
         raise HTTPException(status_code=400, detail=f"Error downloading image: {str(e)}")
 
 def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 25) -> str:
-    """Generate AI video using Stable Video Diffusion"""
+    """Generate AI video using Stable Video Diffusion - GPU ONLY"""
+    
+    # Strict requirements - no fallbacks
+    if not SVD_AVAILABLE:
+        raise HTTPException(status_code=503, detail="StableVideoDiffusionPipeline not available - upgrade diffusers to >=0.24.0")
     
     if not svd_pipeline:
         raise HTTPException(status_code=503, detail="AI video generation not available - SVD model not loaded")
     
-    # Ensure we're using GPU for AI video generation
     if device == "cpu":
-        raise HTTPException(status_code=503, detail="GPU required for AI video generation - CPU fallback not allowed")
+        raise HTTPException(status_code=503, detail="GPU required for AI video generation - CPU not allowed")
     
     try:
         with TimingContext("ai_video_generation", logger):

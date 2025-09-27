@@ -18,8 +18,8 @@ WORKDIR /app
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 
-# Install PyTorch with CUDA support from official index
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Install PyTorch with CUDA support - using stable versions
+RUN pip install --no-cache-dir torch==2.1.2+cu121 torchvision==0.16.2+cu121 --index-url https://download.pytorch.org/whl/cu121
 
 # Install other requirements
 RUN pip install --no-cache-dir -r requirements.txt
