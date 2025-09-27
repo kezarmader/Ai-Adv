@@ -693,11 +693,19 @@ class VideoAnimationEngine:
 # AI-based video generation setup
 logger.info("Initializing AI models for video generation...")
 
-# Check GPU availability
+# Check GPU availability and configure CUDA memory management
 device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info(f"Using device: {device}")
 
 if device == "cuda":
+    # MEMORY FIX: Configure CUDA memory allocation to reduce fragmentation
+    import os
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    
+    # MEMORY FIX: Set memory fraction to prevent OOM
+    torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of available GPU memory
+    torch.cuda.empty_cache()
+    
     log_gpu_usage(logger, "before_model_loading")
 
 # Load CLIP for image understanding (lightweight, used for motion planning)
@@ -794,26 +802,48 @@ def _resize_with_smart_crop(image: Image.Image, target_size: tuple) -> Image.Ima
     # Resize to exact target size
     return cropped.resize(target_size, Image.Resampling.LANCZOS)
 
-# Load Stable Video Diffusion with nightly PyTorch
+# Load Stable Video Diffusion with nightly PyTorch - MEMORY OPTIMIZED
 svd_pipeline = None
 if not SVD_AVAILABLE:
     logger.warning("StableVideoDiffusionPipeline not available - check diffusers version")
 else:
     try:
         with TimingContext("svd_model_loading", logger):
-            logger.info("Loading Stable Video Diffusion model with nightly PyTorch...", extra={
+            logger.info("Loading Stable Video Diffusion model with MEMORY OPTIMIZATION...", extra={
                 "pytorch_version": "nightly",
-                "cuda_version": "12.8",
-                "diffusers_available": SVD_AVAILABLE
+                "cuda_version": "12.8", 
+                "diffusers_available": SVD_AVAILABLE,
+                "memory_optimization": "enabled"
             })
+            
+            # MEMORY FIX: Free up GPU memory before loading SVD
+            if device == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            # MEMORY FIX: Load SVD with maximum memory efficiency
             svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
                 "stabilityai/stable-video-diffusion-img2vid-xt",
                 torch_dtype=torch.float16,
-                variant="fp16"
-            ).to(device)
-            logger.info("Stable Video Diffusion model loaded successfully")
+                variant="fp16",
+                low_cpu_mem_usage=True  # MEMORY FIX: Reduce CPU memory usage
+            )
+            
+            # MEMORY FIX: Enable all memory optimizations BEFORE moving to GPU
+            svd_pipeline.enable_model_cpu_offload()  # Keep models on CPU until needed
+            svd_pipeline.enable_vae_slicing()        # Process VAE in slices
+            svd_pipeline.enable_vae_tiling()         # Process VAE in tiles
+            
+            # MEMORY FIX: Move to GPU with sequential loading
             if device == "cuda":
-                log_gpu_usage(logger, "after_svd_loading")
+                svd_pipeline = svd_pipeline.to(device)
+                torch.cuda.empty_cache()  # Clean up after GPU transfer
+                
+            logger.info("Stable Video Diffusion model loaded with MEMORY OPTIMIZATION", extra={
+                "memory_optimizations": ["cpu_offload", "vae_slicing", "vae_tiling", "low_cpu_mem_usage"]
+            })
+            if device == "cuda":
+                log_gpu_usage(logger, "after_svd_loading_optimized")
     except Exception as e:
         logger.error(f"Failed to load SVD model: {e}. Check GPU compatibility and model availability.")
         svd_pipeline = None
@@ -1188,7 +1218,12 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             
             motion_intensity = style_motion_map.get(style, 40)  # Default engaging for mobile
             
-            # PREMIUM SVD GENERATION: Maximum quality settings for mobile Reels
+            # MEMORY-OPTIMIZED SVD GENERATION: Balance quality and memory usage
+            # Clear GPU cache before generation
+            if device == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
             with torch.no_grad():
                 frames = svd_pipeline(
                     image=image_resized,
@@ -1197,11 +1232,15 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                     num_frames=duration_frames,
                     motion_bucket_id=motion_intensity,  # Engaging motion for mobile
                     fps=7,  # SVD's optimal generation FPS
-                    noise_aug_strength=0.01,  # PREMIUM: Minimal noise for crystal clarity
-                    decode_chunk_size=4,  # PREMIUM: Smaller chunks for maximum quality (uses more memory)
+                    noise_aug_strength=0.02,  # MEMORY FIX: Slightly higher noise for less memory
+                    decode_chunk_size=2,  # MEMORY FIX: Larger chunks to reduce memory fragmentation
                     num_videos_per_prompt=1,  # Generate single high-quality video
                     generator=torch.Generator().manual_seed(42)  # Consistent quality
                 ).frames[0]
+            
+            # MEMORY FIX: Clear cache after generation
+            if device == "cuda":
+                torch.cuda.empty_cache()
             
             # Convert frames to numpy arrays
             video_frames = []
@@ -1362,8 +1401,8 @@ async def generate_video(data: VideoRequest):
             # The generate_ai_video_from_image function will analyze the product and create the prompt
             prompt = ""  # Empty prompt will trigger intelligent generation
             
-            # PREMIUM QUALITY: Longer duration for high-quality Reels (15-30 seconds optimal)
-            duration_frames = max(40, min(120, data.duration * 12))  # ~12 frames per second for premium longer videos
+            # MEMORY-OPTIMIZED: Balanced duration for quality and memory efficiency
+            duration_frames = max(25, min(60, data.duration * 8))  # MEMORY FIX: ~8 frames per second for memory efficiency
             
             filename = generate_ai_video_from_image(
                 image=image,
