@@ -1185,14 +1185,14 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             original_width, original_height = image.size
             original_aspect = original_width / original_height
             
-            # ULTRA MEMORY-OPTIMIZED: Much smaller resolutions to prevent OOM
-            # Use very conservative sizes to ensure generation completes
+            # EXTREME MEMORY-OPTIMIZED: Ultra small resolutions to prevent OOM
+            # Use minimal sizes to ensure generation completes on limited GPU memory
             if original_aspect > 1.5:  # Very wide - crop to smaller vertical
-                target_size = (384, 576)   # ULTRA MEMORY FIX: Smaller 2:3 vertical
+                target_size = (256, 384)   # EXTREME MEMORY FIX: Ultra small 2:3 vertical
             elif original_aspect > 1.0:  # Landscape - smaller square
-                target_size = (384, 384)   # ULTRA MEMORY FIX: Smaller 1:1 square format
+                target_size = (256, 256)   # EXTREME MEMORY FIX: Ultra small 1:1 square format
             else:  # Portrait or square - smaller vertical
-                target_size = (384, 576)   # ULTRA MEMORY FIX: Smaller 2:3 vertical
+                target_size = (256, 384)   # EXTREME MEMORY FIX: Ultra small 2:3 vertical
             
             # Extract factual product information from ASIN service metadata
             product_info = extract_product_info_from_metadata(product_metadata)
@@ -1263,20 +1263,27 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                 "final_intensity": motion_intensity
             })
             
-            # ULTRA MEMORY-OPTIMIZED SVD GENERATION: Aggressive memory management
-            # Clear GPU cache and force garbage collection before generation
+            # EXTREME MEMORY-OPTIMIZED SVD GENERATION: Maximum memory management
+            # Aggressive memory cleanup before SVD generation
             if device == "cuda":
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                # Force garbage collection
+                # Clear all GPU cache multiple times
+                for _ in range(3):
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                
+                # Force aggressive garbage collection
                 import gc
                 gc.collect()
+                gc.collect()  # Run twice for better cleanup
+                
+                # Clear cache again after GC
                 torch.cuda.empty_cache()
+                torch.cuda.synchronize()
                 
                 # Log memory usage before generation
                 allocated = torch.cuda.memory_allocated() / 1024**3
                 reserved = torch.cuda.memory_reserved() / 1024**3
-                logger.info("Pre-SVD memory status", extra={
+                logger.info("Pre-SVD memory status (after aggressive cleanup)", extra={
                     "allocated_gb": round(allocated, 2),
                     "reserved_gb": round(reserved, 2),
                     "target_frames": duration_frames,
@@ -1469,9 +1476,9 @@ async def generate_video(data: VideoRequest):
             # The generate_ai_video_from_image function will analyze the product and create the prompt
             prompt = ""  # Empty prompt will trigger intelligent generation
             
-            # MEMORY-OPTIMIZED: Conservative frame count to prevent OOM
-            # SVD generates at ~8fps, so we need reasonable frame count for desired duration
-            duration_frames = max(16, min(64, data.duration * 6))  # Conservative frame count to prevent OOM
+            # EXTREME MEMORY-OPTIMIZED: Ultra conservative frame count to prevent OOM
+            # SVD generates at ~8fps, use minimal frames for memory-constrained GPU
+            duration_frames = max(12, min(24, data.duration * 3))  # Extreme memory conservation
             
             # Run the heavy GPU computation in a thread pool to avoid blocking
             import asyncio
