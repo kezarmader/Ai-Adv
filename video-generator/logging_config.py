@@ -52,7 +52,7 @@ class StructuredFormatter(logging.Formatter):
                               'filename', 'module', 'lineno', 'funcName', 'created', 
                               'msecs', 'relativeCreated', 'thread', 'threadName', 
                               'processName', 'process', 'getMessage', 'exc_info', 
-                              'exc_text', 'stack_info']:
+                              'exc_text', 'stack_info', 'message']:  # Exclude 'message' to prevent overwrite
                     log_entry[key] = value
         
         return json.dumps(log_entry)

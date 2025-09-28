@@ -72,7 +72,7 @@ def setup_logging(service_name: str = "orchestrator", log_level: str = "INFO"):
                 'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 'filename', 
                 'module', 'lineno', 'funcName', 'created', 'msecs', 'relativeCreated', 
                 'thread', 'threadName', 'processName', 'process', 'getMessage', 
-                'exc_info', 'exc_text', 'stack_info', 'taskName'
+                'exc_info', 'exc_text', 'stack_info', 'taskName', 'message'  # Exclude 'message' to prevent overwrite
             }
             
             for key, value in record.__dict__.items():
