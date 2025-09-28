@@ -777,75 +777,127 @@ def _resize_with_smart_crop(image: Image.Image, target_size: tuple) -> Image.Ima
     # Resize to exact target size
     return cropped.resize(target_size, Image.Resampling.LANCZOS)
 
-# Load Stable Video Diffusion with nightly PyTorch - MEMORY OPTIMIZED
+class DynamicModelManager:
+    """Manages dynamic loading/unloading of GPU models to maximize memory efficiency"""
+    
+    def __init__(self):
+        self.svd_pipeline = None
+        self.svd_loaded = False
+        self.device = device
+        
+    def unload_svd_pipeline(self):
+        """Unload SVD pipeline from GPU to free memory"""
+        if self.svd_pipeline is not None:
+            logger.info("Unloading SVD pipeline from GPU memory")
+            # Move to CPU and delete references
+            self.svd_pipeline.to("cpu")
+            del self.svd_pipeline
+            self.svd_pipeline = None
+            self.svd_loaded = False
+            
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                
+            logger.info("SVD pipeline unloaded successfully")
+    
+    def load_svd_pipeline(self):
+        """Load SVD pipeline to GPU when needed"""
+        if self.svd_pipeline is None and SVD_AVAILABLE:
+            logger.info("Loading SVD pipeline to GPU memory")
+            
+            # Aggressive memory cleanup before loading
+            if self.device == "cuda":
+                for _ in range(3):
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                import gc
+                gc.collect()
+                gc.collect()
+                torch.cuda.empty_cache()
+            
+            try:
+                # Load SVD with maximum memory efficiency
+                self.svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
+                    "stabilityai/stable-video-diffusion-img2vid-xt",
+                    torch_dtype=torch.float16,
+                    variant="fp16",
+                    low_cpu_mem_usage=True
+                )
+                
+                # Enable memory optimizations
+                try:
+                    self.svd_pipeline.enable_model_cpu_offload()
+                    logger.info("Model CPU offload enabled")
+                except AttributeError:
+                    logger.warning("enable_model_cpu_offload not available")
+                
+                try:
+                    self.svd_pipeline.enable_vae_slicing()
+                    logger.info("VAE slicing enabled")
+                except AttributeError:
+                    logger.warning("enable_vae_slicing not available")
+                
+                try:
+                    self.svd_pipeline.enable_vae_tiling()
+                    logger.info("VAE tiling enabled")
+                except AttributeError:
+                    logger.warning("enable_vae_tiling not available")
+                
+                # Move to GPU
+                if self.device == "cuda":
+                    self.svd_pipeline = self.svd_pipeline.to(self.device)
+                    torch.cuda.empty_cache()
+                
+                self.svd_loaded = True
+                logger.info("SVD pipeline loaded successfully")
+                
+            except Exception as e:
+                logger.error(f"Failed to load SVD pipeline: {e}")
+                self.svd_pipeline = None
+                self.svd_loaded = False
+                raise
+    
+    def get_svd_pipeline(self):
+        """Get SVD pipeline, loading it if necessary"""
+        if not self.svd_loaded:
+            self.load_svd_pipeline()
+        return self.svd_pipeline
+    
+    def request_llm_offload(self):
+        """Request that the LLM service offload its models to free GPU memory"""
+        try:
+            import requests
+            # Make request to LLM service to offload models
+            response = requests.post("http://llm-service:11434/api/offload", timeout=30)
+            if response.status_code == 200:
+                logger.info("LLM models offloaded successfully")
+                return True
+            else:
+                logger.warning(f"LLM offload request failed: {response.status_code}")
+                return False
+        except Exception as e:
+            logger.warning(f"Could not request LLM offload: {e}")
+            return False
+
+# Initialize dynamic model manager
+model_manager = DynamicModelManager()
+
+# Load Stable Video Diffusion with dynamic management - MEMORY OPTIMIZED
 svd_pipeline = None
 if not SVD_AVAILABLE:
     logger.warning("StableVideoDiffusionPipeline not available - check diffusers version")
 else:
-    try:
-        with TimingContext("svd_model_loading", logger):
-            logger.info("Loading Stable Video Diffusion model with MEMORY OPTIMIZATION...", extra={
-                "pytorch_version": "nightly",
-                "cuda_version": "12.8", 
-                "diffusers_available": SVD_AVAILABLE,
-                "memory_optimization": "enabled"
-            })
-            
-            # MEMORY FIX: Free up GPU memory before loading SVD
-            if device == "cuda":
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-            
-            # MEMORY FIX: Load SVD with maximum memory efficiency
-            svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
-                "stabilityai/stable-video-diffusion-img2vid-xt",
-                torch_dtype=torch.float16,
-                variant="fp16",
-                low_cpu_mem_usage=True  # MEMORY FIX: Reduce CPU memory usage
-            )
-            
-            # MEMORY FIX: Enable all memory optimizations BEFORE moving to GPU (with version compatibility)
-            try:
-                svd_pipeline.enable_model_cpu_offload()  # Keep models on CPU until needed
-                logger.info("Model CPU offload enabled")
-            except AttributeError:
-                logger.warning("enable_model_cpu_offload not available in this diffusers version")
-            
-            try:
-                svd_pipeline.enable_vae_slicing()        # Process VAE in slices
-                logger.info("VAE slicing enabled")
-            except AttributeError:
-                logger.warning("enable_vae_slicing not available in this diffusers version")
-            
-            try:
-                svd_pipeline.enable_vae_tiling()         # Process VAE in tiles
-                logger.info("VAE tiling enabled")
-            except AttributeError:
-                logger.warning("enable_vae_tiling not available in this diffusers version")
-            
-            # MEMORY FIX: Move to GPU with sequential loading
-            if device == "cuda":
-                svd_pipeline = svd_pipeline.to(device)
-                torch.cuda.empty_cache()  # Clean up after GPU transfer
-                
-            # Check which optimizations are actually available
-            available_optimizations = ["low_cpu_mem_usage"]
-            if hasattr(svd_pipeline, 'enable_model_cpu_offload'):
-                available_optimizations.append("cpu_offload")
-            if hasattr(svd_pipeline, 'enable_vae_slicing'):
-                available_optimizations.append("vae_slicing")
-            if hasattr(svd_pipeline, 'enable_vae_tiling'):
-                available_optimizations.append("vae_tiling")
-            
-            logger.info("Stable Video Diffusion model loaded with MEMORY OPTIMIZATION", extra={
-                "memory_optimizations": available_optimizations,
-                "diffusers_version_compatible": len(available_optimizations) > 1
-            })
-            if device == "cuda":
-                log_gpu_usage(logger, "after_svd_loading_optimized")
-    except Exception as e:
-        logger.error(f"Failed to load SVD model: {e}. Check GPU compatibility and model availability.")
-        svd_pipeline = None
+    # Don't load SVD immediately - use dynamic loading instead for maximum memory efficiency
+    logger.info("SVD pipeline configured for dynamic loading", extra={
+        "diffusers_available": SVD_AVAILABLE,
+        "dynamic_loading": True,
+        "memory_strategy": "on_demand_loading"
+    })
+    svd_pipeline = None  # Will be loaded dynamically by model_manager
 
 # Animation engines not needed - using pure AI generation
 
@@ -1153,17 +1205,22 @@ def generate_factual_use_case_prompt(product_info: dict, style: str) -> str:
     return final_prompt
 
 def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 40, style: str = "smooth", product_metadata: ProductMetadata = None, target_duration_seconds: int = 8) -> str:
-    """Generate AI video using Stable Video Diffusion - GPU ONLY with AGGRESSIVE MEMORY MANAGEMENT"""
+    """Generate AI video using Stable Video Diffusion with dynamic model loading"""
     
-    # Strict requirements - no fallbacks
+    # Check if SVD is available
     if not SVD_AVAILABLE:
         raise HTTPException(status_code=503, detail="StableVideoDiffusionPipeline not available - upgrade diffusers to >=0.24.0")
     
-    if not svd_pipeline:
-        raise HTTPException(status_code=503, detail="AI video generation not available - SVD model not loaded")
-    
     if device == "cpu":
         raise HTTPException(status_code=503, detail="GPU required for AI video generation - CPU not allowed")
+    
+    # Request LLM offload to free GPU memory
+    logger.info("Requesting LLM model offload to free GPU memory for video generation")
+    model_manager.request_llm_offload()
+    
+    # Wait a moment for offload to complete
+    import time
+    time.sleep(2)
     
     # AGGRESSIVE MEMORY CLEANUP before starting
     if device == "cuda":
@@ -1290,10 +1347,14 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
                     "target_size": target_size
                 })
             
+            # Load SVD pipeline dynamically when needed
+            logger.info("Loading SVD pipeline dynamically for video generation")
+            dynamic_svd_pipeline = model_manager.get_svd_pipeline()
+            
             # Generate with proper frame count and timing
             actual_svd_fps = 8  # SVD's actual generation rate
             with torch.no_grad():
-                frames = svd_pipeline(
+                frames = dynamic_svd_pipeline(
                     image=image_resized,
                     height=target_size[1],
                     width=target_size[0],
@@ -1382,6 +1443,10 @@ def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_
             cleanup_thread = threading.Thread(target=cleanup_video, args=(video_path, filename))
             cleanup_thread.daemon = True
             cleanup_thread.start()
+            
+            # Optionally unload SVD pipeline after generation to free memory
+            # (Can be re-enabled if needed for faster subsequent generations)
+            # model_manager.unload_svd_pipeline()
             
             return filename
             
@@ -1705,9 +1770,48 @@ def check_video_status(filename: str):
     
     return {"status": "unknown", "message": "Video status unknown"}
 
+@app.post("/offload-svd")
+def offload_svd():
+    """Manually offload SVD pipeline to free GPU memory"""
+    try:
+        model_manager.unload_svd_pipeline()
+        return {"status": "success", "message": "SVD pipeline offloaded successfully"}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to offload SVD pipeline: {str(e)}"}
+
+@app.post("/load-svd")
+def load_svd():
+    """Manually load SVD pipeline to GPU"""
+    try:
+        model_manager.load_svd_pipeline()
+        return {"status": "success", "message": "SVD pipeline loaded successfully"}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to load SVD pipeline: {str(e)}"}
+
+@app.get("/model-status")
+def model_status():
+    """Get current model loading status"""
+    if device == "cuda":
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        available = total - allocated
+        
+        return {
+            "svd_loaded": model_manager.svd_loaded,
+            "gpu_memory": {
+                "allocated_gb": round(allocated, 2),
+                "reserved_gb": round(reserved, 2),
+                "total_gb": round(total, 2),
+                "available_gb": round(available, 2)
+            }
+        }
+    else:
+        return {"svd_loaded": model_manager.svd_loaded, "device": "cpu"}
+
 @app.get("/")
 def health_check():
-    """Health check endpoint - GPU-only AI video generation service"""
+    """Health check endpoint - Dynamic GPU model loading AI video generation service"""
     gpu_available = torch.cuda.is_available()
     gpu_device_count = torch.cuda.device_count() if gpu_available else 0
     current_device = str(device)
