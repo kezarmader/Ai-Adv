@@ -1473,13 +1473,19 @@ async def generate_video(data: VideoRequest):
             # SVD generates at ~8fps, so we need reasonable frame count for desired duration
             duration_frames = max(16, min(64, data.duration * 6))  # Conservative frame count to prevent OOM
             
-            filename = generate_ai_video_from_image(
-                image=image,
-                prompt=prompt,
-                duration_frames=duration_frames,
-                style=data.style,
-                product_metadata=data.product_metadata,
-                target_duration_seconds=data.duration
+            # Run the heavy GPU computation in a thread pool to avoid blocking
+            import asyncio
+            loop = asyncio.get_event_loop()
+            filename = await loop.run_in_executor(
+                None, 
+                lambda: generate_ai_video_from_image(
+                    image=image,
+                    prompt=prompt,
+                    duration_frames=duration_frames,
+                    style=data.style,
+                    product_metadata=data.product_metadata,
+                    target_duration_seconds=data.duration
+                )
             )
             
             return {
