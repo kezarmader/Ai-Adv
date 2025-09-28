@@ -1486,7 +1486,7 @@ async def generate_video(data: VideoRequest):
                     product_metadata=data.product_metadata,
                     target_duration_seconds=data.duration
                 )
-            )
+            ) 
             
             return {
                 "filename": filename,
