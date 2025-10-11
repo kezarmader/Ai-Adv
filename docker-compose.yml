@@ -52,8 +52,8 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: "0"
       PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:128
-      # Replace with your actual HF token
-      HF_TOKEN: "hf_your_actual_token_here"
+      # HF token loaded from .env file
+      HF_TOKEN: ${HF_TOKEN}
     networks: [app-net]
     expose:
       - "5002"

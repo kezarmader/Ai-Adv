@@ -104,13 +104,14 @@ class DynamicModelManager:
                 log_gpu_usage(logger, "before_svd_load")
             
             try:
-                # Load with minimal memory footprint - using ungated model
+                # Load SVD 1.1 - Better quality model (25 frames vs 14 frames)
                 self.svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
-                    "stabilityai/stable-video-diffusion-img2vid",
+                    "stabilityai/stable-video-diffusion-img2vid-xt-1-1",
                     torch_dtype=torch.float16,
                     variant="fp16",
                     use_safetensors=True,
-                    device_map="auto"
+                    device_map="auto",
+                    token=os.getenv("HF_TOKEN")
                 )
                 
                 # Enable memory efficient attention
