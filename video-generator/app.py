@@ -117,12 +117,20 @@ class DynamicModelManager:
                 if self.device == "cuda":
                     self.svd_pipeline = self.svd_pipeline.to("cuda")
                 
-                # Enable memory efficient attention
+                # Enable memory efficient attention and optimizations for SVD 1.1
                 self.svd_pipeline.enable_model_cpu_offload()
-                self.svd_pipeline.enable_vae_slicing()
                 
-                if hasattr(self.svd_pipeline, 'enable_vae_tiling'):
-                    self.svd_pipeline.enable_vae_tiling()
+                # Enable attention slicing for memory efficiency
+                self.svd_pipeline.enable_attention_slicing()
+                
+                # Enable xFormers memory efficient attention if available
+                try:
+                    self.svd_pipeline.enable_xformers_memory_efficient_attention()
+                    logger.info("xFormers memory efficient attention enabled")
+                except Exception as e:
+                    logger.info(f"xFormers not available: {e}")
+                    
+                # Note: enable_vae_slicing() and enable_vae_tiling() are not available in StableVideoDiffusionPipeline
                 
                 if self.device == "cuda":
                     log_gpu_usage(logger, "after_svd_load")
