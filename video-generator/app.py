@@ -117,11 +117,12 @@ class DynamicModelManager:
                 if self.device == "cuda":
                     self.svd_pipeline = self.svd_pipeline.to("cuda")
                 
-                # Enable memory efficient attention and optimizations for SVD 1.1
-                self.svd_pipeline.enable_model_cpu_offload()
+                # Enable memory efficient optimizations for SVD 1.1
+                # Use sequential CPU offload for maximum memory efficiency
+                self.svd_pipeline.enable_sequential_cpu_offload()
                 
                 # Enable attention slicing for memory efficiency
-                self.svd_pipeline.enable_attention_slicing()
+                self.svd_pipeline.enable_attention_slicing("max")  # Maximum memory savings
                 
                 # Enable xFormers memory efficient attention if available
                 try:
@@ -131,6 +132,7 @@ class DynamicModelManager:
                     logger.info(f"xFormers not available: {e}")
                     
                 # Note: enable_vae_slicing() and enable_vae_tiling() are not available in StableVideoDiffusionPipeline
+                logger.info("Applied aggressive memory optimizations: sequential CPU offload, max attention slicing")
                 
                 if self.device == "cuda":
                     log_gpu_usage(logger, "after_svd_load")
@@ -219,24 +221,36 @@ def generate_video_from_image(image: Image.Image, prompt: str, duration_seconds:
             target_size = (1024, 576)
             image_resized = image.resize(target_size, Image.Resampling.LANCZOS)
             
-            # Calculate frames for duration
+            # Calculate frames for duration - Start with fewer frames for memory
             fps = 6  # SVD default FPS
-            num_frames = min(duration_seconds * fps, 25)  # SVD max frames
+            num_frames = min(duration_seconds * fps, 14)  # Reduced from 25 to 14 for memory
             
             logger.info(f"Generating {num_frames} frames at {fps} FPS")
             
-            # Generate video frames using SVD
+            # Aggressive memory cleanup before generation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                gc.collect()
+            
+            # Generate video frames using SVD with aggressive memory optimization
             with torch.no_grad():
                 frames = svd_pipeline(
                     image=image_resized,
-                    decode_chunk_size=2,  # Memory optimization
+                    decode_chunk_size=1,  # Most aggressive memory optimization
                     num_frames=num_frames,
                     motion_bucket_id=127,  # Standard motion
                     fps=fps,
                     noise_aug_strength=0.02,  # Minimal noise
-                    num_inference_steps=20,  # Balanced quality/speed
+                    num_inference_steps=15,  # Reduced from 20 for memory
                     generator=torch.manual_seed(42)  # Reproducible results
                 ).frames[0]
+            
+            # Memory cleanup after generation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                gc.collect()
             
             # Save video as MP4
             video_filename = f"video_{uuid.uuid4().hex}.mp4"
