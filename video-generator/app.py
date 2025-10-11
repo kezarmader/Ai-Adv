@@ -9,6 +9,7 @@ from typing import Optional
 from io import BytesIO
 
 import torch
+import numpy as np
 from PIL import Image
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -103,9 +104,9 @@ class DynamicModelManager:
                 log_gpu_usage(logger, "before_svd_load")
             
             try:
-                # Load with minimal memory footprint
+                # Load with minimal memory footprint - using ungated model
                 self.svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
-                    "stabilityai/stable-video-diffusion-img2vid-xt-1-1",
+                    "stabilityai/stable-video-diffusion-img2vid",
                     torch_dtype=torch.float16,
                     variant="fp16",
                     use_safetensors=True,
