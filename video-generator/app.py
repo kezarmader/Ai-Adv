@@ -165,6 +165,20 @@ class DynamicModelManager:
         except Exception as e:
             logger.warning(f"Could not request LLM offload: {e}")
             return False
+    
+    def request_image_generator_offload(self):
+        """Request that the image generator offload its models to free GPU memory"""
+        try:
+            response = requests.post("http://image-generator:5001/offload-to-cpu", timeout=30)
+            if response.status_code == 200:
+                logger.info("Image generator models offloaded successfully")
+                return True
+            else:
+                logger.warning(f"Image generator offload request failed: {response.status_code}")
+                return False
+        except Exception as e:
+            logger.warning(f"Could not request image generator offload: {e}")
+            return False
 
 # Initialize model manager
 model_manager = DynamicModelManager()
@@ -195,10 +209,11 @@ def generate_video_from_image(image: Image.Image, prompt: str, duration_seconds:
     if device == "cpu":
         raise HTTPException(status_code=503, detail="GPU required for AI video generation")
     
-    # Request LLM offload to free GPU memory
-    logger.info("Requesting LLM model offload for video generation")
+    # Request model offloads to free GPU memory for video generation
+    logger.info("Requesting model offloads for video generation")
     model_manager.request_llm_offload()
-    time.sleep(2)  # Wait for offload
+    model_manager.request_image_generator_offload()  # This is the critical one!
+    time.sleep(3)  # Wait for offloads to complete
     
     # Aggressive memory cleanup
     if device == "cuda":

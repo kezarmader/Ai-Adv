@@ -491,6 +491,61 @@ def check_image_status(filename: str):
     
     return {"status": "unknown", "message": "Image status unknown"}
 
+@app.post("/offload-to-cpu")
+def offload_models_to_cpu():
+    """Offload image generation models to CPU to free GPU memory"""
+    try:
+        global pipe, refiner
+        
+        logger.info("Offloading image generation models to CPU")
+        
+        # Move models to CPU
+        if 'pipe' in globals() and pipe is not None:
+            pipe = pipe.to('cpu')
+            logger.info("Base model moved to CPU")
+            
+        if 'refiner' in globals() and refiner is not None:
+            refiner = refiner.to('cpu')
+            logger.info("Refiner model moved to CPU")
+        
+        # Clear GPU cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            
+        log_gpu_usage(logger, "after_cpu_offload")
+        
+        return {"status": "success", "message": "Models offloaded to CPU"}
+        
+    except Exception as e:
+        logger.error(f"Failed to offload models: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/reload-to-gpu")
+def reload_models_to_gpu():
+    """Reload image generation models back to GPU"""
+    try:
+        global pipe, refiner
+        
+        logger.info("Reloading image generation models to GPU")
+        
+        # Move models back to GPU
+        if 'pipe' in globals() and pipe is not None:
+            pipe = pipe.to('cuda')
+            logger.info("Base model moved to GPU")
+            
+        if 'refiner' in globals() and refiner is not None:
+            refiner = refiner.to('cuda')
+            logger.info("Refiner model moved to GPU")
+            
+        log_gpu_usage(logger, "after_gpu_reload")
+        
+        return {"status": "success", "message": "Models reloaded to GPU"}
+        
+    except Exception as e:
+        logger.error(f"Failed to reload models: {e}")
+        return {"status": "error", "message": str(e)}
+
 @app.get("/")
 def health_check():
     """Health check endpoint"""
