@@ -328,20 +328,20 @@ async def run_ad_campaign(req: Request):
                             "generated_image_filename": filename
                         })
                     
-                    # ALWAYS use AI video generation endpoint - no fallback to traditional animation
+                    # Use new simplified video generation API
                     video_prompt = {
                         "image_url": image_source,
                         "prompt": prompt_context,
-                        "duration_frames": 30  # ~2 seconds at 15fps output, ~4 seconds with interpolation
+                        "duration_seconds": video_duration
                     }
-                    endpoint = "/generate-ai-video"
+                    endpoint = "/generate-video"
                     
-                    logger.info("Sending AI video generation request", extra={
+                    logger.info("Sending video generation request", extra={
                         "prompt": prompt_context[:100] + "..." if len(prompt_context) > 100 else prompt_context,
-                        "duration_frames": video_prompt["duration_frames"]
+                        "duration_seconds": video_prompt["duration_seconds"]
                     })
                     
-                    video_response = requests.post(f"http://video-generator:5003{endpoint}", json=video_prompt)
+                    video_response = requests.post(f"http://video-generator:5002{endpoint}", json=video_prompt)
                     duration_ms = (time.time() - start_time) * 1000
                     
                     logger.info("Video generation request completed", extra={
@@ -349,16 +349,16 @@ async def run_ad_campaign(req: Request):
                         "endpoint": endpoint,
                         "status_code": video_response.status_code,
                         "duration_ms": round(duration_ms, 2),
-                        "video_type": "ai_generated" if endpoint == "/generate-ai-video" else "animated",
-                        "animation_type": video_animation if endpoint == "/generate" else "stable_video_diffusion"
+                        "video_type": "ai_generated_svd"
                     })
                     
                     if video_response.status_code == 200:
                         video_data = video_response.json()
-                        video_filename = video_data.get("filename", "")
+                        video_filename = video_data.get("video_filename", "")
                         if video_filename:
                             host = req.headers.get("host", "localhost:8000")
-                            video_url = f"http://{host}/download-video/{video_filename}"
+                            # Use video-generator's direct URL for MP4 download
+                            video_url = f"http://video-generator:5002/videos/{video_filename}"
                             logger.info("Video URL constructed", extra={
                                 "video_filename": video_filename,
                                 "video_url": video_url
@@ -515,12 +515,12 @@ async def download_video(filename: str, request: Request):
             
             # Make request to video-generator service
             start_time = time.time()
-            video_response = requests.get(f"http://video-generator:5003/download/{filename}")
+            video_response = requests.get(f"http://video-generator:5002/videos/{filename}")
             duration_ms = (time.time() - start_time) * 1000
             
             logger.debug("Video download request completed", extra={
                 "service": "video-generator",
-                "endpoint": f"/download/{filename}",
+                "endpoint": f"/videos/{filename}",
                 "status_code": video_response.status_code,
                 "duration_ms": round(duration_ms, 2)
             })
@@ -611,21 +611,16 @@ async def generate_video_only(req: Request):
                 start_time = time.time()
                 video_prompt = {
                     "image_url": image_url,
-                    "animation_type": animation_type,
-                    "duration": duration,
-                    "fps": fps,
-                    "style": style,
-                    "text_overlay": text_overlay,
-                    "brand_text": brand_text,
-                    "cta_text": cta_text
+                    "prompt": f"Video animation with {style} style, {animation_type} movement",
+                    "duration_seconds": duration
                 }
                 
-                video_response = requests.post("http://video-generator:5003/generate", json=video_prompt)
+                video_response = requests.post("http://video-generator:5002/generate-video", json=video_prompt)
                 duration_ms = (time.time() - start_time) * 1000
                 
                 logger.info("Video generation request completed", extra={
                     "service": "video-generator",
-                    "endpoint": "/generate",
+                    "endpoint": "/generate-video",
                     "status_code": video_response.status_code,
                     "duration_ms": round(duration_ms, 2)
                 })
@@ -636,14 +631,13 @@ async def generate_video_only(req: Request):
             # Process video response
             with TimingContext("video_response_processing", logger):
                 response_data = video_response.json()
-                filename = response_data.get("filename", "")
+                filename = response_data.get("video_filename", "")
                 
                 if not filename:
                     raise ValueError("Error generating video filename")
                 
-                # Get the host from the request to construct the proper external URL
-                host = req.headers.get("host", "localhost:8000")
-                video_url = f"http://{host}/download-video/{filename}"
+                # Use video-generator's direct URL for MP4 download
+                video_url = f"http://video-generator:5002/videos/{filename}"
                 
                 logger.info("Video URL constructed", extra={
                     "video_filename": filename,
@@ -653,12 +647,9 @@ async def generate_video_only(req: Request):
             # Prepare final response
             final_response = {
                 "video_url": video_url,
-                "filename": filename,
-                "file_size_mb": response_data.get("file_size_mb"),
+                "video_filename": filename,
                 "duration_seconds": response_data.get("duration_seconds"),
-                "fps": response_data.get("fps"),
-                "animation_type": response_data.get("animation_type"),
-                "expires_in_minutes": response_data.get("expires_in_minutes", 15)
+                "status": response_data.get("status", "success")
             }
             
             logger.info("Video generation completed successfully", extra={

@@ -54,7 +54,7 @@ services:
       PYTORCH_CUDA_ALLOC_CONF: max_split_size_mb:128
     networks: [app-net]
     expose:
-      - "5003"
+      - "5002"
     restart: unless-stopped
     deploy:
       resources:

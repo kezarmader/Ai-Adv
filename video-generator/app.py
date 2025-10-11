@@ -1,784 +1,72 @@
-from fastapi import FastAPI, HTTPException, Request, File, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel
-import torch
-import cv2
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
-import uuid
 import os
-import time
-import threading
-import json
-import requests
-from io import BytesIO
-import imageio
-from typing import Optional, List
 import logging
-from diffusers import StableDiffusionPipeline, DDIMScheduler
-from transformers import CLIPVisionModel, CLIPImageProcessor
+import uuid
+import time
+import gc
+import requests
+from contextlib import contextmanager
+from typing import Optional
+from io import BytesIO
 
-# Try to import SVD - will be checked after logger is set up
+import torch
+from PIL import Image
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+# Import video generation libraries
 try:
     from diffusers import StableVideoDiffusionPipeline
     SVD_AVAILABLE = True
 except ImportError:
-    StableVideoDiffusionPipeline = None
     SVD_AVAILABLE = False
-import torchvision.transforms as transforms
-from logging_config import (
-    setup_logging, TimingContext, generate_request_id, request_id,
-    log_gpu_usage
-)
+    StableVideoDiffusionPipeline = None
 
-# Setup structured logging
+from logging_config import setup_logging, TimingContext, log_gpu_usage
+
+# Configure logging
 logger = setup_logging("video-generator", "INFO")
 
-class LoggingMiddleware(BaseHTTPMiddleware):
-    """Middleware to log all HTTP requests and responses"""
-    
-    async def dispatch(self, request: Request, call_next):
-        # Generate and set request ID
-        req_id = generate_request_id()
-        request_id.set(req_id)
-        
-        # Log request details
-        client_ip = request.client.host if request.client else "unknown"
-        logger.info("HTTP request received", extra={
-            "method": request.method,
-            "path": str(request.url.path),
-            "client_ip": client_ip,
-            "event": "http_request"
-        })
-        
-        # Start timing
-        start_time = time.time()
-        
-        # Process request
-        response = await call_next(request)
-        
-        # Calculate duration
-        duration_ms = (time.time() - start_time) * 1000
-        
-        # Log response details
-        logger.info("HTTP response sent", extra={
-            "status_code": response.status_code,
-            "duration_ms": round(duration_ms, 2),
-            "event": "http_response"
-        })
-        
-        # Add request ID to response headers
-        response.headers["X-Request-ID"] = req_id
-        
-        return response
+# Initialize FastAPI app
+app = FastAPI(title="AI Video Generator Service", version="2.0.0")
 
-app = FastAPI(title="AI Advertisement Generator - Video Generator", version="1.0.0")
-app.add_middleware(LoggingMiddleware)
+# Directory setup
+VIDEOS_DIR = os.path.join(os.path.dirname(__file__), "videos")
+TEMP_DIR = os.path.join(os.path.dirname(__file__), "temp")
 
-# Log service startup
-logger.info("Video generator service starting up")
-
-# Create directories
-VIDEOS_DIR = "/app/videos"
-TEMP_DIR = "/app/temp"
+# Create directories if they don't exist
 for directory in [VIDEOS_DIR, TEMP_DIR]:
     os.makedirs(directory, exist_ok=True)
-    logger.info(f"Directory created: {directory}")
 
-# Mount static files for serving videos
+# Mount static files for serving videos (downloadable MP4s)
 app.mount("/videos", StaticFiles(directory=VIDEOS_DIR), name="videos")
 
-# Dictionary to track video creation times for cleanup
-video_timestamps = {}
-
-# Video generation parameters
-DEFAULT_FPS = 30
-DEFAULT_DURATION = 5  # seconds
-DEFAULT_WIDTH = 1024
-DEFAULT_HEIGHT = 1024
-
-class ProductMetadata(BaseModel):
-    """Factual product data from ASIN service"""
-    product_title: Optional[str] = None
-    category: Optional[str] = None
-    brand: Optional[str] = None
-    product_type: Optional[str] = None
-    features: Optional[List[str]] = None
-    use_case: Optional[str] = None
-    target_audience: Optional[str] = None
-    keywords: Optional[List[str]] = None
-
-class VideoRequest(BaseModel):
-    image_url: Optional[str] = None
-    animation_type: str = "zoom_pan"  # zoom_pan, fade_effects, parallax, ken_burns
-    duration: int = 8  # PREMIUM: Longer duration for mobile Reels (8-15 seconds optimal)
-    fps: int = 30
-    audio_prompt: Optional[str] = None
-    style: str = "smooth"  # smooth, dramatic, gentle, energetic
-    text_overlay: Optional[str] = None
-    brand_text: Optional[str] = None
-    cta_text: Optional[str] = None
-    use_model: bool = False  # Whether to create a model scene first (disabled for better quality)
-    product_metadata: Optional[ProductMetadata] = None  # Factual product data from ASIN service
-
-class AIVideoRequest(BaseModel):
-    image_url: str
-    prompt: str = "dramatic transformation with dynamic motion"
-    duration_frames: int = 60  # PREMIUM: Longer videos for high-quality mobile Reels
-    product_metadata: Optional[ProductMetadata] = None  # Factual product data from ASIN service
-
-class AIVideoAnimationEngine:
-    """AI-powered video animation engine using CLIP for motion understanding"""
-    
-    def __init__(self, device: str, clip_model, clip_processor):
-        self.device = device
-        self.clip_model = clip_model
-        self.clip_processor = clip_processor
-        self.temp_dir = TEMP_DIR
-    
-    def analyze_image_for_motion(self, image: Image.Image) -> dict:
-        """Analyze image content to determine optimal motion patterns"""
-        try:
-            if not self.clip_model or not self.clip_processor:
-                logger.warning("CLIP model not available, using fallback analysis")
-                return self._fallback_image_analysis(image)
-            
-            # Process image with CLIP
-            inputs = self.clip_processor(images=image, return_tensors="pt").to(self.device)
-            
-            with torch.no_grad():
-                image_features = self.clip_model(**inputs).last_hidden_state
-                
-            # Analyze features to determine motion characteristics
-            # This is a simplified version - in production, you'd train a model for this
-            feature_variance = torch.var(image_features).item()
-            
-            # Determine motion based on image complexity
-            if feature_variance > 0.5:
-                motion_type = "parallax"  # Complex images work well with parallax
-                intensity = min(0.8, feature_variance)
-            elif feature_variance > 0.3:
-                motion_type = "ken_burns"  # Medium complexity for ken burns
-                intensity = 0.5
-            else:
-                motion_type = "zoom_pan"  # Simple images for zoom/pan
-                intensity = 0.3
-            
-            return {
-                "motion_type": motion_type,
-                "intensity": intensity,
-                "complexity": feature_variance
-            }
-            
-        except Exception as e:
-            logger.warning(f"AI motion analysis failed: {e}. Using fallback.")
-            return self._fallback_image_analysis(image)
-    
-    def _fallback_image_analysis(self, image: Image.Image) -> dict:
-        """Fallback image analysis without CLIP model"""
-        import numpy as np
-        
-        # Convert to numpy array for analysis
-        img_array = np.array(image)
-        
-        # Simple image complexity analysis based on pixel variance
-        if len(img_array.shape) == 3:
-            # Color image - analyze color variance
-            color_variance = np.var(img_array, axis=(0, 1)).mean()
-            edge_variance = np.var(np.diff(img_array, axis=0)) + np.var(np.diff(img_array, axis=1))
-        else:
-            # Grayscale
-            color_variance = np.var(img_array)
-            edge_variance = np.var(np.diff(img_array, axis=0)) + np.var(np.diff(img_array, axis=1))
-        
-        # Normalize and determine motion type
-        complexity = min(1.0, (color_variance + edge_variance) / 10000)
-        
-        if complexity > 0.6:
-            return {"motion_type": "parallax", "intensity": 0.7, "complexity": complexity}
-        elif complexity > 0.3:
-            return {"motion_type": "ken_burns", "intensity": 0.5, "complexity": complexity}
-        else:
-            return {"motion_type": "zoom_pan", "intensity": 0.4, "complexity": complexity}
-    
-    def create_ai_enhanced_animation(self, image: Image.Image, duration: int, fps: int, 
-                                   style: str = "smooth", motion_analysis: dict = None) -> List[np.ndarray]:
-        """Create AI-enhanced animation based on image content analysis"""
-        
-        try:
-            if not motion_analysis:
-                motion_analysis = self.analyze_image_for_motion(image)
-            
-            logger.info("Creating AI-enhanced animation", extra={
-                "motion_type": motion_analysis.get("motion_type"),
-                "intensity": motion_analysis.get("intensity"),
-                "complexity": motion_analysis.get("complexity")
-            })
-            
-            # Use the determined motion type with AI-enhanced parameters
-            animation_type = motion_analysis.get("motion_type", "zoom_pan")
-            intensity = motion_analysis.get("intensity", 0.3)
-            
-            # Enhance the basic animation engine with AI insights
-            if animation_type == "parallax":
-                return self._create_ai_parallax(image, duration, fps, style, intensity)
-            elif animation_type == "ken_burns":
-                return self._create_ai_ken_burns(image, duration, fps, style, intensity)
-            else:
-                return self._create_ai_zoom_pan(image, duration, fps, style, intensity)
-                
-        except Exception as e:
-            logger.warning(f"AI analysis failed, falling back to enhanced zoom_pan: {e}")
-            # Fallback to a sophisticated zoom_pan with multiple phases
-            return self._create_ai_zoom_pan(image, duration, fps, style, 0.4)
-    
-    def _create_ai_zoom_pan(self, image: Image.Image, duration: int, fps: int, 
-                           style: str, intensity: float) -> List[np.ndarray]:
-        """AI-enhanced zoom and pan with content-aware movement"""
-        frames = []
-        total_frames = duration * fps
-        img_array = np.array(image)
-        height, width = img_array.shape[:2]
-        
-        # AI-determined parameters
-        max_zoom = 1.0 + (0.5 * intensity)  # Zoom based on content complexity
-        
-        for i in range(total_frames):
-            progress = i / total_frames
-            eased_progress = self._apply_easing(progress, style)
-            
-            # AI-enhanced zoom curve
-            zoom_factor = 1.0 + ((max_zoom - 1.0) * eased_progress)
-            
-            # Content-aware pan (simplified - in production, use optical flow)
-            pan_x = int(width * 0.08 * intensity * np.sin(eased_progress * np.pi))
-            pan_y = int(height * 0.05 * intensity * np.cos(eased_progress * np.pi))
-            
-            frame = self._transform_frame(img_array, zoom_factor, 0, pan_x, pan_y, width, height)
-            frames.append(frame)
-        
-        return frames
-    
-    def _create_ai_ken_burns(self, image: Image.Image, duration: int, fps: int, 
-                            style: str, intensity: float) -> List[np.ndarray]:
-        """AI-enhanced Ken Burns effect with content-aware focal points"""
-        frames = []
-        total_frames = duration * fps
-        img_array = np.array(image)
-        height, width = img_array.shape[:2]
-        
-        # AI-determined focal points (simplified)
-        start_zoom = 1.0
-        end_zoom = 1.0 + (0.6 * intensity)
-        
-        # Content-aware movement direction
-        end_x = int(width * 0.15 * intensity)
-        end_y = int(height * 0.08 * intensity)
-        
-        for i in range(total_frames):
-            progress = i / total_frames
-            eased_progress = self._apply_easing(progress, style)
-            
-            current_zoom = start_zoom + (end_zoom - start_zoom) * eased_progress
-            current_x = int(end_x * eased_progress)
-            current_y = int(end_y * eased_progress)
-            
-            frame = self._transform_frame(img_array, current_zoom, 0, current_x, current_y, width, height)
-            frames.append(frame)
-        
-        return frames
-    
-    def _create_ai_parallax(self, image: Image.Image, duration: int, fps: int, 
-                           style: str, intensity: float) -> List[np.ndarray]:
-        """AI-enhanced parallax with content-aware depth simulation"""
-        frames = []
-        total_frames = duration * fps
-        img_array = np.array(image)
-        height, width = img_array.shape[:2]
-        
-        for i in range(total_frames):
-            progress = i / total_frames
-            eased_progress = self._apply_easing(progress, style)
-            
-            # AI-enhanced parallax movement
-            zoom = 1.0 + (0.2 * intensity * np.sin(eased_progress * 2 * np.pi))
-            rotation = 3 * intensity * np.sin(eased_progress * np.pi)
-            
-            frame = self._transform_frame(img_array, zoom, rotation, 0, 0, width, height)
-            frames.append(frame)
-        
-        return frames
-    
-    def _apply_easing(self, t: float, style: str) -> float:
-        """Apply easing function based on style"""
-        if style == "smooth":
-            return self._ease_in_out_cubic(t)
-        elif style == "dramatic":
-            return self._ease_in_out_quart(t)
-        elif style == "gentle":
-            return self._ease_in_out_sine(t)
-        else:  # energetic
-            return self._ease_out_bounce(t)
-    
-    def _transform_frame(self, img_array: np.ndarray, zoom: float, rotation: float, 
-                        pan_x: int, pan_y: int, target_width: int, target_height: int) -> np.ndarray:
-        """Apply transformations to frame"""
-        height, width = img_array.shape[:2]
-        
-        # Create transformation matrix
-        center = (width // 2, height // 2)
-        matrix = cv2.getRotationMatrix2D(center, rotation, zoom)
-        
-        # Add translation
-        matrix[0, 2] += pan_x
-        matrix[1, 2] += pan_y
-        
-        # Apply transformation
-        transformed = cv2.warpAffine(img_array, matrix, (width, height), flags=cv2.INTER_LANCZOS4)
-        
-        # Resize to target if needed
-        if (height, width) != (target_height, target_width):
-            transformed = cv2.resize(transformed, (target_width, target_height), interpolation=cv2.INTER_LANCZOS4)
-        
-        return transformed
-    
-    # Easing functions (same as in VideoAnimationEngine)
-    def _ease_in_out_cubic(self, t: float) -> float:
-        return 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
-    
-    def _ease_in_out_quart(self, t: float) -> float:
-        return 8 * t * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 4) / 2
-    
-    def _ease_in_out_sine(self, t: float) -> float:
-        return -(np.cos(np.pi * t) - 1) / 2
-    
-    def _ease_out_bounce(self, t: float) -> float:
-        n1 = 7.5625
-        d1 = 2.75
-        
-        if t < 1 / d1:
-            return n1 * t * t
-        elif t < 2 / d1:
-            t -= 1.5 / d1
-            return n1 * t * t + 0.75
-        elif t < 2.5 / d1:
-            t -= 2.25 / d1
-            return n1 * t * t + 0.9375
-        else:
-            t -= 2.625 / d1
-            return n1 * t * t + 0.984375
-
-class VideoAnimationEngine:
-    """Engine for creating various video animations from static images"""
-    
-    def __init__(self):
-        self.temp_dir = TEMP_DIR
-        
-    def create_zoom_pan_animation(self, image: Image.Image, duration: int, fps: int, style: str = "smooth") -> List[np.ndarray]:
-        """Create zoom and pan animation"""
-        frames = []
-        total_frames = duration * fps
-        
-        # Convert PIL image to numpy array
-        img_array = np.array(image)
-        height, width = img_array.shape[:2]
-        
-        logger.info(f"Creating zoom-pan animation", extra={
-            "total_frames": total_frames,
-            "duration": duration,
-            "fps": fps,
-            "image_size": f"{width}x{height}"
-        })
-        
-        for i in range(total_frames):
-            progress = i / total_frames
-            
-            # Apply easing based on style
-            if style == "smooth":
-                eased_progress = self._ease_in_out_cubic(progress)
-            elif style == "dramatic":
-                eased_progress = self._ease_in_out_quart(progress)
-            elif style == "gentle":
-                eased_progress = self._ease_in_out_sine(progress)
-            else:  # energetic
-                eased_progress = self._ease_out_bounce(progress)
-            
-            # Calculate zoom factor (1.0 to 1.3)
-            zoom_factor = 1.0 + (0.3 * eased_progress)
-            
-            # Calculate pan offset (slight movement)
-            pan_x = int(width * 0.05 * np.sin(eased_progress * np.pi))
-            pan_y = int(height * 0.03 * np.cos(eased_progress * np.pi))
-            
-            # Create zoomed and panned frame
-            frame = self._zoom_and_pan_frame(img_array, zoom_factor, pan_x, pan_y, width, height)
-            frames.append(frame)
-            
-        return frames
-    
-    def create_ken_burns_effect(self, image: Image.Image, duration: int, fps: int, style: str = "smooth") -> List[np.ndarray]:
-        """Create Ken Burns effect (slow zoom with pan)"""
-        frames = []
-        total_frames = duration * fps
-        
-        img_array = np.array(image)
-        height, width = img_array.shape[:2]
-        
-        logger.info(f"Creating Ken Burns effect", extra={
-            "total_frames": total_frames,
-            "duration": duration,
-            "fps": fps
-        })
-        
-        # Define start and end positions/zoom
-        start_zoom = 1.0
-        end_zoom = 1.4
-        start_x, start_y = 0, 0
-        end_x = int(width * 0.1)
-        end_y = int(height * 0.05)
-        
-        for i in range(total_frames):
-            progress = i / total_frames
-            eased_progress = self._ease_in_out_cubic(progress)
-            
-            # Interpolate zoom and position
-            current_zoom = start_zoom + (end_zoom - start_zoom) * eased_progress
-            current_x = int(start_x + (end_x - start_x) * eased_progress)
-            current_y = int(start_y + (end_y - start_y) * eased_progress)
-            
-            frame = self._zoom_and_pan_frame(img_array, current_zoom, current_x, current_y, width, height)
-            frames.append(frame)
-            
-        return frames
-    
-    def create_parallax_effect(self, image: Image.Image, duration: int, fps: int, style: str = "smooth") -> List[np.ndarray]:
-        """Create parallax effect with multiple movement layers"""
-        frames = []
-        total_frames = duration * fps
-        
-        # Convert to numpy and create multiple layers
-        img_array = np.array(image)
-        height, width = img_array.shape[:2]
-        
-        logger.info(f"Creating parallax effect", extra={
-            "total_frames": total_frames,
-            "duration": duration,
-            "fps": fps
-        })
-        
-        for i in range(total_frames):
-            progress = i / total_frames
-            eased_progress = self._ease_in_out_cubic(progress)
-            
-            # Multiple layer movements at different speeds
-            base_movement = eased_progress * 0.1
-            
-            # Create multiple offset versions
-            frame = img_array.copy()
-            
-            # Apply subtle transformations
-            zoom = 1.0 + (0.15 * np.sin(eased_progress * 2 * np.pi))
-            rotation = 2 * np.sin(eased_progress * np.pi)  # degrees
-            
-            frame = self._apply_transform(frame, zoom, rotation, width, height)
-            frames.append(frame)
-            
-        return frames
-    
-    def create_fade_effects(self, image: Image.Image, duration: int, fps: int, style: str = "smooth") -> List[np.ndarray]:
-        """Create fade in/out effects with subtle movements"""
-        frames = []
-        total_frames = duration * fps
-        
-        img_array = np.array(image)
-        height, width = img_array.shape[:2]
-        
-        logger.info(f"Creating fade effects", extra={
-            "total_frames": total_frames,
-            "duration": duration,
-            "fps": fps
-        })
-        
-        fade_in_frames = total_frames // 4
-        fade_out_frames = total_frames // 4
-        stable_frames = total_frames - fade_in_frames - fade_out_frames
-        
-        frame_count = 0
-        
-        # Fade in
-        for i in range(fade_in_frames):
-            alpha = i / fade_in_frames
-            frame = self._apply_fade(img_array, alpha)
-            frames.append(frame)
-            frame_count += 1
-        
-        # Stable with subtle movement
-        for i in range(stable_frames):
-            progress = i / stable_frames
-            zoom = 1.0 + (0.1 * np.sin(progress * 2 * np.pi))
-            frame = self._zoom_and_pan_frame(img_array, zoom, 0, 0, width, height)
-            frames.append(frame)
-            frame_count += 1
-        
-        # Fade out
-        for i in range(fade_out_frames):
-            alpha = 1.0 - (i / fade_out_frames)
-            frame = self._apply_fade(img_array, alpha)
-            frames.append(frame)
-            frame_count += 1
-        
-        return frames
-    
-    def add_text_overlays(self, frames: List[np.ndarray], text_overlay: str = None, 
-                         brand_text: str = None, cta_text: str = None) -> List[np.ndarray]:
-        """Add text overlays to video frames"""
-        if not any([text_overlay, brand_text, cta_text]):
-            return frames
-        
-        logger.info("Adding text overlays to frames", extra={
-            "frame_count": len(frames),
-            "has_text_overlay": bool(text_overlay),
-            "has_brand_text": bool(brand_text),
-            "has_cta_text": bool(cta_text)
-        })
-        
-        overlaid_frames = []
-        
-        for i, frame in enumerate(frames):
-            # Convert numpy array to PIL Image
-            pil_frame = Image.fromarray(frame)
-            
-            # Add overlays
-            pil_frame = self._add_text_to_frame(pil_frame, text_overlay, brand_text, cta_text, i, len(frames))
-            
-            # Convert back to numpy array
-            overlaid_frames.append(np.array(pil_frame))
-        
-        return overlaid_frames
-    
-    def _add_text_to_frame(self, frame: Image.Image, text_overlay: str = None, 
-                          brand_text: str = None, cta_text: str = None, frame_num: int = 0, total_frames: int = 1) -> Image.Image:
-        """Add text overlay to a single frame"""
-        overlay = Image.new('RGBA', frame.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-        
-        try:
-            font_brand = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42)
-            font_text = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-            font_cta = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
-        except:
-            font_brand = font_text = font_cta = ImageFont.load_default()
-        
-        # Calculate animation progress for text effects
-        progress = frame_num / max(total_frames - 1, 1)
-        
-        # Brand text (top-left, always visible)
-        if brand_text:
-            self._draw_text_with_background(
-                draw, (30, 30), brand_text, font_brand,
-                text_color=(255, 255, 255, 255), bg_color=(0, 0, 0, 180)
-            )
-        
-        # Main text overlay (center, fade in after 1 second)
-        if text_overlay and frame_num > (total_frames * 0.2):
-            text_alpha = min(255, int((frame_num - total_frames * 0.2) / (total_frames * 0.3) * 255))
-            text_y = frame.height // 2 - 50
-            self._draw_text_with_background(
-                draw, (frame.width // 2 - 200, text_y), text_overlay, font_text,
-                text_color=(255, 255, 255, text_alpha), bg_color=(0, 100, 200, min(180, text_alpha))
-            )
-        
-        # CTA text (bottom, appear in last 2 seconds)
-        if cta_text and frame_num > (total_frames * 0.6):
-            cta_alpha = min(255, int((frame_num - total_frames * 0.6) / (total_frames * 0.4) * 255))
-            cta_y = frame.height - 80
-            self._draw_text_with_background(
-                draw, (30, cta_y), cta_text, font_cta,
-                text_color=(255, 255, 255, cta_alpha), bg_color=(255, 100, 0, min(200, cta_alpha))
-            )
-        
-        # Composite overlay onto frame
-        frame = frame.convert('RGBA')
-        combined = Image.alpha_composite(frame, overlay)
-        return combined.convert('RGB')
-    
-    def _draw_text_with_background(self, draw, position, text, font, text_color, bg_color, padding=8):
-        """Draw text with background box"""
-        x, y = position
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        
-        bg_rect = [x - padding, y - padding, x + text_width + padding, y + text_height + padding]
-        draw.rectangle(bg_rect, fill=bg_color)
-        draw.text((x, y), text, font=font, fill=text_color)
-    
-    def _zoom_and_pan_frame(self, img_array: np.ndarray, zoom_factor: float, pan_x: int, pan_y: int, target_width: int, target_height: int) -> np.ndarray:
-        """Apply zoom and pan to a frame"""
-        height, width = img_array.shape[:2]
-        
-        # Calculate new dimensions
-        new_width = int(width * zoom_factor)
-        new_height = int(height * zoom_factor)
-        
-        # Resize image
-        resized = cv2.resize(img_array, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
-        
-        # Calculate crop coordinates
-        start_x = max(0, (new_width - target_width) // 2 + pan_x)
-        start_y = max(0, (new_height - target_height) // 2 + pan_y)
-        end_x = min(new_width, start_x + target_width)
-        end_y = min(new_height, start_y + target_height)
-        
-        # Crop to target size
-        cropped = resized[start_y:end_y, start_x:end_x]
-        
-        # Ensure exact target size
-        if cropped.shape[:2] != (target_height, target_width):
-            cropped = cv2.resize(cropped, (target_width, target_height), interpolation=cv2.INTER_LANCZOS4)
-        
-        return cropped
-    
-    def _apply_transform(self, img_array: np.ndarray, zoom: float, rotation: float, target_width: int, target_height: int) -> np.ndarray:
-        """Apply zoom and rotation transformation"""
-        height, width = img_array.shape[:2]
-        
-        # Create transformation matrix
-        center = (width // 2, height // 2)
-        matrix = cv2.getRotationMatrix2D(center, rotation, zoom)
-        
-        # Apply transformation
-        transformed = cv2.warpAffine(img_array, matrix, (width, height), flags=cv2.INTER_LANCZOS4)
-        
-        # Resize to target if needed
-        if (height, width) != (target_height, target_width):
-            transformed = cv2.resize(transformed, (target_width, target_height), interpolation=cv2.INTER_LANCZOS4)
-        
-        return transformed
-    
-    def _apply_fade(self, img_array: np.ndarray, alpha: float) -> np.ndarray:
-        """Apply fade effect to frame"""
-        faded = img_array.astype(np.float32)
-        faded = faded * alpha
-        return np.clip(faded, 0, 255).astype(np.uint8)
-    
-    # Easing functions
-    def _ease_in_out_cubic(self, t: float) -> float:
-        return 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
-    
-    def _ease_in_out_quart(self, t: float) -> float:
-        return 8 * t * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 4) / 2
-    
-    def _ease_in_out_sine(self, t: float) -> float:
-        return -(np.cos(np.pi * t) - 1) / 2
-    
-    def _ease_out_bounce(self, t: float) -> float:
-        n1 = 7.5625
-        d1 = 2.75
-        
-        if t < 1 / d1:
-            return n1 * t * t
-        elif t < 2 / d1:
-            t -= 1.5 / d1
-            return n1 * t * t + 0.75
-        elif t < 2.5 / d1:
-            t -= 2.25 / d1
-            return n1 * t * t + 0.9375
-        else:
-            t -= 2.625 / d1
-            return n1 * t * t + 0.984375
-
-# AI-based video generation setup
-logger.info("Initializing AI models for video generation...")
-
-# Check GPU availability and configure CUDA memory management
+# GPU configuration
 device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info(f"Using device: {device}")
 
 if device == "cuda":
-    # MEMORY FIX: Configure CUDA memory allocation to reduce fragmentation
-    import os
+    # Configure CUDA memory allocation to reduce fragmentation
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-    
-    # MEMORY FIX: Set memory fraction to prevent OOM
-    torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of available GPU memory
+    torch.cuda.set_per_process_memory_fraction(0.9)
     torch.cuda.empty_cache()
-    
-    log_gpu_usage(logger, "before_model_loading")
+    log_gpu_usage(logger, "startup")
 
-# MEMORY FIX: Disable CLIP model to save GPU memory for SVD
-logger.info("MEMORY OPTIMIZATION: Skipping CLIP model to reserve memory for SVD")
-clip_processor = None
-clip_model = None
-
-# MEMORY FIX: Disable image generation model to save GPU memory for SVD
-logger.info("MEMORY OPTIMIZATION: Skipping image generation model to reserve memory for SVD")
-image_pipeline = None
-
-if device == "cuda":
-    log_gpu_usage(logger, "after_clip_loading")
-
-def _enhance_for_svd(image: Image.Image) -> Image.Image:
-    """PREMIUM ENHANCEMENT: Maximum quality enhancement for mobile Reels"""
-    # PREMIUM: Strong contrast for mobile screen visibility
-    enhancer = ImageEnhance.Contrast(image)
-    image = enhancer.enhance(1.35)  # Higher contrast for mobile screens
+# Request/Response Models
+class VideoGenerationRequest(BaseModel):
+    image_url: str
+    prompt: str
+    duration_seconds: Optional[int] = 8
     
-    # PREMIUM: Maximum sharpness for crystal clear product details
-    enhancer = ImageEnhance.Sharpness(image)
-    image = enhancer.enhance(1.6)  # Very high sharpness for mobile clarity
-    
-    # PREMIUM: Vibrant colors that pop on mobile screens
-    enhancer = ImageEnhance.Color(image)
-    image = enhancer.enhance(1.25)  # Strong color enhancement for mobile impact
-    
-    # PREMIUM: Optimized brightness for mobile viewing
-    enhancer = ImageEnhance.Brightness(image)
-    image = enhancer.enhance(1.08)  # Brighter for mobile screens
-    
-    # PREMIUM: Apply slight unsharp mask effect for even more detail
-    image = image.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=2))
-    
-    return image
-
-def _resize_with_smart_crop(image: Image.Image, target_size: tuple) -> Image.Image:
-    """Resize image to target size using intelligent cropping to preserve important content"""
-    target_width, target_height = target_size
-    original_width, original_height = image.size
-    
-    target_aspect = target_width / target_height
-    original_aspect = original_width / original_height
-    
-    if abs(target_aspect - original_aspect) < 0.1:
-        # Aspect ratios are close, just resize
-        return image.resize(target_size, Image.Resampling.LANCZOS)
-    
-    # Calculate crop dimensions to match target aspect ratio
-    if original_aspect > target_aspect:
-        # Original is wider, crop width (keep height)
-        new_width = int(original_height * target_aspect)
-        new_height = original_height
-        # Center crop horizontally
-        left = (original_width - new_width) // 2
-        top = 0
-    else:
-        # Original is taller, crop height (keep width)
-        new_width = original_width
-        new_height = int(original_width / target_aspect)
-        # Crop from top to preserve subject (products usually centered-top)
-        left = 0
-        top = max(0, (original_height - new_height) // 4)  # Slight bias toward top
-    
-    # Crop the image
-    cropped = image.crop((left, top, left + new_width, top + new_height))
-    
-    # Resize to exact target size
-    return cropped.resize(target_size, Image.Resampling.LANCZOS)
+class VideoGenerationResponse(BaseModel):
+    video_filename: str
+    video_url: str
+    duration_seconds: int
+    status: str
 
 class DynamicModelManager:
-    """Manages dynamic loading/unloading of GPU models to maximize memory efficiency"""
+    """Manages dynamic loading/unloading of GPU models for memory efficiency"""
     
     def __init__(self):
         self.svd_pipeline = None
@@ -789,7 +77,6 @@ class DynamicModelManager:
         """Unload SVD pipeline from GPU to free memory"""
         if self.svd_pipeline is not None:
             logger.info("Unloading SVD pipeline from GPU memory")
-            # Move to CPU and delete references
             self.svd_pipeline.to("cpu")
             del self.svd_pipeline
             self.svd_pipeline = None
@@ -798,9 +85,8 @@ class DynamicModelManager:
             if self.device == "cuda":
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-                import gc
                 gc.collect()
-                torch.cuda.empty_cache()
+                log_gpu_usage(logger, "after_svd_unload")
                 
             logger.info("SVD pipeline unloaded successfully")
     
@@ -811,46 +97,30 @@ class DynamicModelManager:
             
             # Aggressive memory cleanup before loading
             if self.device == "cuda":
-                for _ in range(3):
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                import gc
-                gc.collect()
-                gc.collect()
                 torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                gc.collect()
+                log_gpu_usage(logger, "before_svd_load")
             
             try:
-                # Load SVD with maximum memory efficiency
+                # Load with minimal memory footprint
                 self.svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
-                    "stabilityai/stable-video-diffusion-img2vid-xt",
+                    "stabilityai/stable-video-diffusion-img2vid-xt-1-1",
                     torch_dtype=torch.float16,
                     variant="fp16",
-                    low_cpu_mem_usage=True
+                    use_safetensors=True,
+                    device_map="auto"
                 )
                 
-                # Enable memory optimizations
-                try:
-                    self.svd_pipeline.enable_model_cpu_offload()
-                    logger.info("Model CPU offload enabled")
-                except AttributeError:
-                    logger.warning("enable_model_cpu_offload not available")
+                # Enable memory efficient attention
+                self.svd_pipeline.enable_model_cpu_offload()
+                self.svd_pipeline.enable_vae_slicing()
                 
-                try:
-                    self.svd_pipeline.enable_vae_slicing()
-                    logger.info("VAE slicing enabled")
-                except AttributeError:
-                    logger.warning("enable_vae_slicing not available")
-                
-                try:
+                if hasattr(self.svd_pipeline, 'enable_vae_tiling'):
                     self.svd_pipeline.enable_vae_tiling()
-                    logger.info("VAE tiling enabled")
-                except AttributeError:
-                    logger.warning("enable_vae_tiling not available")
                 
-                # Move to GPU
                 if self.device == "cuda":
-                    self.svd_pipeline = self.svd_pipeline.to(self.device)
-                    torch.cuda.empty_cache()
+                    log_gpu_usage(logger, "after_svd_load")
                 
                 self.svd_loaded = True
                 logger.info("SVD pipeline loaded successfully")
@@ -870,8 +140,6 @@ class DynamicModelManager:
     def request_llm_offload(self):
         """Request that the LLM service offload its models to free GPU memory"""
         try:
-            import requests
-            # Make request to LLM service to offload models
             response = requests.post("http://llm-service:11434/api/offload", timeout=30)
             if response.status_code == 200:
                 logger.info("LLM models offloaded successfully")
@@ -883,985 +151,201 @@ class DynamicModelManager:
             logger.warning(f"Could not request LLM offload: {e}")
             return False
 
-# Initialize dynamic model manager
+# Initialize model manager
 model_manager = DynamicModelManager()
-
-# Load Stable Video Diffusion with dynamic management - MEMORY OPTIMIZED
-svd_pipeline = None
-if not SVD_AVAILABLE:
-    logger.warning("StableVideoDiffusionPipeline not available - check diffusers version")
-else:
-    # Don't load SVD immediately - use dynamic loading instead for maximum memory efficiency
-    logger.info("SVD pipeline configured for dynamic loading", extra={
-        "diffusers_available": SVD_AVAILABLE,
-        "dynamic_loading": True,
-        "memory_strategy": "on_demand_loading"
-    })
-    svd_pipeline = None  # Will be loaded dynamically by model_manager
-
-# Animation engines not needed - using pure AI generation
-
-# Startup validation
-def validate_service_requirements():
-    """Validate that service can run with required GPU and AI models"""
-    issues = []
-    
-    if device == "cpu":
-        issues.append("Service requires GPU but CPU detected")
-        logger.warning("Service requires GPU but CPU detected")
-    
-    if not torch.cuda.is_available():
-        issues.append("CUDA not available - GPU required for AI video generation")
-        logger.warning("CUDA not available - GPU required for AI video generation")
-    
-    if not SVD_AVAILABLE:
-        issues.append("StableVideoDiffusionPipeline not available - diffusers version too old")
-        logger.warning("StableVideoDiffusionPipeline not available - diffusers version too old")
-    
-    if not svd_pipeline:
-        issues.append("Stable Video Diffusion model not loaded")
-        logger.warning("Stable Video Diffusion model not loaded")
-    
-    if not image_pipeline:
-        logger.info("Image generation model not loaded - model scenes will be disabled")
-    
-    if not issues:
-        logger.info("Service validation passed", extra={
-            "device": device,
-            "gpu_available": True,
-            "svd_loaded": True,
-            "mode": "gpu_ai_only"
-        })
-        return True
-    else:
-        logger.warning("Service validation found issues", extra={
-            "issues": issues,
-            "service_degraded": True
-        })
-        return False
-
-# Validate service requirements on startup
-service_ready = validate_service_requirements()
 
 def download_image_from_url(image_url: str) -> Image.Image:
     """Download image from URL"""
     try:
-        logger.info(f"Downloading image from URL", extra={"image_url": image_url})
+        logger.info(f"Downloading image from URL: {image_url}")
         
         response = requests.get(image_url, timeout=30)
         response.raise_for_status()
         
         image = Image.open(BytesIO(response.content)).convert('RGB')
-        logger.info(f"Image downloaded successfully", extra={
-            "image_size": image.size,
-            "image_mode": image.mode
-        })
+        logger.info(f"Image downloaded successfully, size: {image.size}")
         
         return image
         
     except Exception as e:
-        logger.error(f"Error downloading image", extra={
-            "image_url": image_url,
-            "error": str(e)
-        })
+        logger.error(f"Error downloading image: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Error downloading image: {str(e)}")
 
-def extract_product_info_from_metadata(metadata: ProductMetadata) -> dict:
-    """Extract factual product information from ASIN service metadata"""
+def generate_video_from_image(image: Image.Image, prompt: str, duration_seconds: int = 8) -> str:
+    """Generate video using Stable Video Diffusion - core functionality"""
     
-    logger.info("Processing product metadata", extra={
-        "metadata_provided": bool(metadata),
-        "metadata_type": type(metadata).__name__ if metadata else None,
-        "product_title": getattr(metadata, 'product_title', None) if metadata else None,
-        "brand": getattr(metadata, 'brand', None) if metadata else None,
-        "category": getattr(metadata, 'category', None) if metadata else None,
-        "use_case": getattr(metadata, 'use_case', None) if metadata else None
-    })
-    
-    if not metadata:
-        # Fallback minimal info when no metadata provided
-        return {
-            "type": "product",
-            "use_case": "general product showcase", 
-            "context": "professional presentation",
-            "brand": "premium brand",
-            "category": "lifestyle product",
-            "target_audience": "consumers"
-        }
-    
-    # Use factual data from ASIN service
-    product_info = {
-        "type": metadata.product_type or "product",
-        "use_case": metadata.use_case or "product demonstration",
-        "context": f"{metadata.category or 'lifestyle'} focused presentation",
-        "brand": metadata.brand or "premium brand",
-        "category": metadata.category or "consumer product",
-        "target_audience": metadata.target_audience or "consumers",
-        "title": metadata.product_title or "product",
-        "features": metadata.features or [],
-        "keywords": metadata.keywords or []
-    }
-    
-    return product_info
-
-def create_model_scene(product_image: Image.Image, product_type: str) -> Image.Image:
-    """Create a lifestyle scene with a model using/demonstrating the product"""
-    
-    if not image_pipeline:
-        logger.warning("Image generation model not available, returning original product image")
-        return product_image
-    
-    try:
-        with TimingContext("model_scene_generation", logger):
-            logger.info("Creating model scene", extra={
-                "product_type": product_type,
-                "original_size": product_image.size
-            })
-            
-            # Define prompts based on product type
-            model_prompts = {
-                "skincare": "professional model applying skincare product, clean modern bathroom, soft natural lighting, commercial photography style, elegant hands, serene expression",
-                "cosmetics": "beautiful model using makeup product, professional makeup studio, perfect lighting, glamorous style, confident expression, commercial beauty photography",
-                "bottle": "athletic person using water bottle or supplement, gym or outdoor setting, active lifestyle, professional fitness photography, dynamic pose",
-                "tech": "person using tech gadget, modern minimalist setting, professional product photography, focused expression, clean aesthetic",
-                "accessory": "stylish person wearing or using accessory, fashion photography style, professional lighting, modern urban background"
-            }
-            
-            base_prompt = model_prompts.get(product_type, model_prompts["accessory"])
-            full_prompt = f"{base_prompt}, high quality, commercial advertisement style, 8k resolution, professional photography"
-            
-            negative_prompt = "low quality, blurry, distorted, amateur, poor lighting, cluttered background, unprofessional"
-            
-            # Generate the model scene
-            with torch.no_grad():
-                generated_images = image_pipeline(
-                    prompt=full_prompt,
-                    negative_prompt=negative_prompt,
-                    num_inference_steps=25,  # Balanced quality/speed
-                    guidance_scale=7.5,
-                    width=768,
-                    height=768,
-                    num_images_per_prompt=1
-                ).images
-            
-            model_scene = generated_images[0]
-            
-            # Composite the original product into the scene
-            # This is a simple overlay - in production, you'd use more sophisticated blending
-            scene_with_product = composite_product_into_scene(model_scene, product_image, product_type)
-            
-            logger.info("Model scene created successfully", extra={
-                "generated_size": model_scene.size,
-                "final_size": scene_with_product.size
-            })
-            
-            return scene_with_product
-            
-    except Exception as e:
-        logger.error("Failed to create model scene", extra={
-            "error": str(e),
-            "product_type": product_type
-        })
-        # Fallback to original product image
-        return product_image
-
-def composite_product_into_scene(scene: Image.Image, product: Image.Image, product_type: str) -> Image.Image:
-    """Composite the product image into the generated model scene"""
-    try:
-        # Create a copy of the scene
-        composite = scene.copy()
-        
-        # Resize product to appropriate size for compositing
-        scene_width, scene_height = scene.size
-        
-        # Size the product based on type
-        size_ratios = {
-            "skincare": 0.15,    # Small, held in hands
-            "cosmetics": 0.12,   # Small makeup item
-            "bottle": 0.2,       # Medium bottle
-            "tech": 0.25,        # Larger tech device
-            "accessory": 0.18    # Medium accessory
-        }
-        
-        ratio = size_ratios.get(product_type, 0.15)
-        product_size = int(min(scene_width, scene_height) * ratio)
-        
-        # Maintain aspect ratio when resizing
-        product_aspect = product.size[0] / product.size[1]
-        if product_aspect > 1:
-            # Wider than tall
-            new_width = product_size
-            new_height = int(product_size / product_aspect)
-        else:
-            # Taller than wide
-            new_height = product_size
-            new_width = int(product_size * product_aspect)
-        
-        product_resized = product.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        
-        # Position based on product type
-        positions = {
-            "skincare": (int(scene_width * 0.7), int(scene_height * 0.6)),  # Lower right, in hands area
-            "cosmetics": (int(scene_width * 0.65), int(scene_height * 0.5)), # Center-right
-            "bottle": (int(scene_width * 0.75), int(scene_height * 0.4)),    # Upper right
-            "tech": (int(scene_width * 0.6), int(scene_height * 0.6)),       # Center-right
-            "accessory": (int(scene_width * 0.5), int(scene_height * 0.7))   # Center-bottom
-        }
-        
-        pos_x, pos_y = positions.get(product_type, (int(scene_width * 0.7), int(scene_height * 0.6)))
-        
-        # Ensure the product fits within scene bounds
-        pos_x = min(pos_x, scene_width - new_width)
-        pos_y = min(pos_y, scene_height - new_height)
-        
-        # Create a mask for smoother blending
-        mask = Image.new('L', product_resized.size, 255)
-        
-        # Apply slight transparency to blend better
-        if product_resized.mode != 'RGBA':
-            product_resized = product_resized.convert('RGBA')
-        
-        # Reduce opacity slightly for natural integration
-        alpha_data = list(product_resized.getdata())
-        alpha_data = [(r, g, b, int(a * 0.95)) for r, g, b, a in alpha_data]
-        product_resized.putdata(alpha_data)
-        
-        # Paste the product onto the scene
-        composite.paste(product_resized, (pos_x, pos_y), product_resized)
-        
-        return composite
-        
-    except Exception as e:
-        logger.error("Failed to composite product into scene", extra={"error": str(e)})
-        # Return the scene without product overlay
-        return scene
-
-def generate_factual_use_case_prompt(product_info: dict, style: str) -> str:
-    """Generate intelligent prompts based on FACTUAL product data from ASIN service"""
-    
-    # Extract factual data
-    product_type = product_info.get("type", "product")
-    use_case = product_info.get("use_case", "product demonstration")
-    context = product_info.get("context", "professional presentation")
-    brand = product_info.get("brand", "premium brand")
-    category = product_info.get("category", "consumer product")
-    target_audience = product_info.get("target_audience", "consumers")
-    title = product_info.get("title", "product")
-    features = product_info.get("features", [])
-    keywords = product_info.get("keywords", [])
-    
-    # Build factual prompt components
-    main_components = []
-    
-    # Primary product showcase
-    if brand and brand != "premium brand":
-        main_components.append(f"Professional {brand} {product_type} showcase")
-    else:
-        main_components.append(f"Professional {product_type} demonstration")
-    
-    # Add specific use case from ASIN data
-    if use_case and use_case != "product demonstration":
-        main_components.append(f"highlighting {use_case}")
-    
-    # Add category context
-    if category and category != "consumer product":
-        main_components.append(f"in {category} market context")
-    
-    # Add key features if available
-    if features:
-        key_features = ", ".join(features[:3])  # Use top 3 features
-        main_components.append(f"emphasizing {key_features}")
-    
-    # Add target audience context
-    if target_audience and target_audience != "consumers":
-        main_components.append(f"designed for {target_audience}")
-    
-    # Combine main components
-    main_prompt = " ".join(main_components)
-    
-    # PREMIUM: Mobile Reels-optimized style enhancements
-    style_enhancements = {
-        "smooth": "with smooth, flowing camera movements optimized for mobile viewing and social media engagement",
-        "dramatic": "with dramatic lighting, bold shadows, and cinematic appeal perfect for viral mobile content", 
-        "energetic": "with dynamic motion, vibrant energy, and high-impact presentation designed for mobile screens",
-        "gentle": "with soft, calming movements and peaceful atmosphere ideal for wellness and lifestyle content",
-        "product show": "with professional studio lighting, precise product focus, and premium commercial quality for mobile advertising"
-    }
-    
-    style_enhancement = style_enhancements.get(style, style_enhancements["smooth"])
-    
-    # Add keywords for better context if available
-    keyword_context = ""
-    if keywords:
-        relevant_keywords = ", ".join(keywords[:3])  # Use top 3 keywords
-        keyword_context = f", featuring {relevant_keywords}"
-    
-    # PREMIUM: Mobile Reels quality specifications
-    quality_spec = "ultra-high definition mobile-optimized quality, perfect for Instagram Reels and TikTok, crystal clear product visibility with enhanced mobile contrast and sharpness"
-    
-    # Combine everything factually
-    final_prompt = f"{main_prompt} {style_enhancement}{keyword_context}, {quality_spec}, premium studio lighting, professional mobile cinematography, vertical format optimization, social media ready"
-    
-    return final_prompt
-
-def generate_ai_video_from_image(image: Image.Image, prompt: str = "", duration_frames: int = 40, style: str = "smooth", product_metadata: ProductMetadata = None, target_duration_seconds: int = 8) -> str:
-    """Generate AI video using Stable Video Diffusion with dynamic model loading"""
-    
-    # Check if SVD is available
     if not SVD_AVAILABLE:
-        raise HTTPException(status_code=503, detail="StableVideoDiffusionPipeline not available - upgrade diffusers to >=0.24.0")
+        raise HTTPException(status_code=503, detail="StableVideoDiffusionPipeline not available")
     
     if device == "cpu":
-        raise HTTPException(status_code=503, detail="GPU required for AI video generation - CPU not allowed")
+        raise HTTPException(status_code=503, detail="GPU required for AI video generation")
     
     # Request LLM offload to free GPU memory
-    logger.info("Requesting LLM model offload to free GPU memory for video generation")
+    logger.info("Requesting LLM model offload for video generation")
     model_manager.request_llm_offload()
+    time.sleep(2)  # Wait for offload
     
-    # Wait a moment for offload to complete
-    import time
-    time.sleep(2)
-    
-    # AGGRESSIVE MEMORY CLEANUP before starting
+    # Aggressive memory cleanup
     if device == "cuda":
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-        # Force garbage collection
-        import gc
         gc.collect()
     
     try:
-        with TimingContext("ai_video_generation", logger):
-            logger.info("Starting AI video generation", extra={
-                "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
-                "duration_frames": duration_frames,
-                "input_image_size": image.size
+        with TimingContext("video_generation", logger):
+            logger.info("Starting video generation", extra={
+                "prompt": prompt,
+                "duration_seconds": duration_seconds,
+                "image_size": image.size
             })
             
-            # Smart resize for SVD while preserving aspect ratio
-            original_width, original_height = image.size
-            original_aspect = original_width / original_height
+            # Get SVD pipeline (loads if needed)
+            svd_pipeline = model_manager.get_svd_pipeline()
             
-            # EXTREME MEMORY-OPTIMIZED: Ultra small resolutions to prevent OOM
-            # Use minimal sizes to ensure generation completes on limited GPU memory
-            if original_aspect > 1.5:  # Very wide - crop to smaller vertical
-                target_size = (256, 384)   # EXTREME MEMORY FIX: Ultra small 2:3 vertical
-            elif original_aspect > 1.0:  # Landscape - smaller square
-                target_size = (256, 256)   # EXTREME MEMORY FIX: Ultra small 1:1 square format
-            else:  # Portrait or square - smaller vertical
-                target_size = (256, 384)   # EXTREME MEMORY FIX: Ultra small 2:3 vertical
+            # Resize image to SVD requirements (1024x576 for optimal performance)
+            target_size = (1024, 576)
+            image_resized = image.resize(target_size, Image.Resampling.LANCZOS)
             
-            # Extract factual product information from ASIN service metadata
-            product_info = extract_product_info_from_metadata(product_metadata)
+            # Calculate frames for duration
+            fps = 6  # SVD default FPS
+            num_frames = min(duration_seconds * fps, 25)  # SVD max frames
             
-            # Generate intelligent prompt if none provided
-            if not prompt or prompt == "dramatic transformation with dynamic motion":
-                prompt = generate_factual_use_case_prompt(product_info, style)
-                logger.info("Generated factual use case prompt from ASIN data", extra={
-                    "product_type": product_info.get("type"),
-                    "use_case": product_info.get("use_case"),
-                    "brand": product_info.get("brand"),
-                    "category": product_info.get("category"),
-                    "has_metadata": bool(product_metadata),
-                    "generated_prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt
-                })
+            logger.info(f"Generating {num_frames} frames at {fps} FPS")
             
-            # Resize with smart cropping to preserve content quality
-            image_resized = _resize_with_smart_crop(image, target_size)
-            
-            # Enhance image quality for better SVD results
-            image_resized = _enhance_for_svd(image_resized)
-            
-            logger.info("Image resized and enhanced for SVD", extra={
-                "original_size": image.size,
-                "original_aspect": f"{original_aspect:.3f}",
-                "target_size": target_size,
-                "target_aspect": f"{target_size[0]/target_size[1]:.3f}",
-                "product_info": product_info
-            })
-            
-            # PREMIUM MOTION: Optimized for engaging mobile Reels with use case awareness
-            style_motion_map = {
-                "smooth": 45,        # Smooth, engaging motion for mobile viewing
-                "gentle": 35,        # Gentle but noticeable motion for Reels
-                "dramatic": 75,      # Bold dramatic motion for viral potential
-                "energetic": 85,     # High-energy motion for active products
-                "product show": 40   # Professional but engaging motion for product focus
-            }
-            
-            base_motion_intensity = style_motion_map.get(style, 40)  # Default engaging for mobile
-            
-            # Enhance motion based on product use case and category from ASIN data
-            use_case = product_info.get("use_case", "").lower()
-            category = product_info.get("category", "").lower()
-            product_type = product_info.get("type", "").lower()
-            
-            # Adjust motion intensity based on factual product information
-            motion_adjustment = 0
-            if "fitness" in use_case or "sports" in category or "workout" in use_case:
-                motion_adjustment += 15  # More dynamic for fitness products
-            elif "beauty" in category or "skincare" in use_case or "cosmetic" in product_type:
-                motion_adjustment += 10  # Elegant motion for beauty products
-            elif "tech" in category or "electronic" in product_type:
-                motion_adjustment += 8   # Modern motion for tech products
-            elif "luxury" in use_case or "premium" in product_info.get("brand", "").lower():
-                motion_adjustment += 12  # Sophisticated motion for luxury
-            elif "wellness" in use_case or "health" in category:
-                motion_adjustment -= 5   # Calmer motion for wellness
-            
-            motion_intensity = min(127, base_motion_intensity + motion_adjustment)  # SVD max is 127
-            
-            logger.info("Motion intensity calculated from use case", extra={
-                "base_intensity": base_motion_intensity,
-                "use_case": use_case,
-                "category": category, 
-                "product_type": product_type,
-                "adjustment": motion_adjustment,
-                "final_intensity": motion_intensity
-            })
-            
-            # EXTREME MEMORY-OPTIMIZED SVD GENERATION: Maximum memory management
-            # Aggressive memory cleanup before SVD generation
-            if device == "cuda":
-                # Clear all GPU cache multiple times
-                for _ in range(3):
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                
-                # Force aggressive garbage collection
-                import gc
-                gc.collect()
-                gc.collect()  # Run twice for better cleanup
-                
-                # Clear cache again after GC
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                
-                # Log memory usage before generation
-                allocated = torch.cuda.memory_allocated() / 1024**3
-                reserved = torch.cuda.memory_reserved() / 1024**3
-                logger.info("Pre-SVD memory status (after aggressive cleanup)", extra={
-                    "allocated_gb": round(allocated, 2),
-                    "reserved_gb": round(reserved, 2),
-                    "target_frames": duration_frames,
-                    "target_size": target_size
-                })
-            
-            # Load SVD pipeline dynamically when needed
-            logger.info("Loading SVD pipeline dynamically for video generation")
-            dynamic_svd_pipeline = model_manager.get_svd_pipeline()
-            
-            # Generate with proper frame count and timing
-            actual_svd_fps = 8  # SVD's actual generation rate
+            # Generate video frames using SVD
             with torch.no_grad():
-                frames = dynamic_svd_pipeline(
+                frames = svd_pipeline(
                     image=image_resized,
-                    height=target_size[1],
-                    width=target_size[0],
-                    num_frames=duration_frames,
-                    motion_bucket_id=motion_intensity,  # Engaging motion for mobile based on use case
-                    fps=actual_svd_fps,  # Proper SVD generation FPS
-                    noise_aug_strength=0.02,  # Balanced noise for quality
-                    decode_chunk_size=1,  # ULTRA MEMORY FIX: Smallest chunk size to minimize memory usage
-                    num_videos_per_prompt=1,  # Generate single high-quality video
-                    generator=torch.Generator().manual_seed(42)  # Consistent quality
+                    decode_chunk_size=2,  # Memory optimization
+                    num_frames=num_frames,
+                    motion_bucket_id=127,  # Standard motion
+                    fps=fps,
+                    noise_aug_strength=0.02,  # Minimal noise
+                    num_inference_steps=20,  # Balanced quality/speed
+                    generator=torch.manual_seed(42)  # Reproducible results
                 ).frames[0]
             
-            # MEMORY FIX: Clear cache after generation
-            if device == "cuda":
-                torch.cuda.empty_cache()
+            # Save video as MP4
+            video_filename = f"video_{uuid.uuid4().hex}.mp4"
+            video_path = os.path.join(VIDEOS_DIR, video_filename)
             
-            # Convert frames to numpy arrays
-            video_frames = []
+            # Convert frames to video using imageio
+            import imageio
+            
+            # Convert PIL images to numpy arrays
+            frame_arrays = []
             for frame in frames:
-                # Convert PIL to numpy array
-                frame_np = np.array(frame)
-                video_frames.append(frame_np)
+                frame_arrays.append(np.array(frame))
             
-            # Save as MP4
-            filename = f"{uuid.uuid4()}.mp4"
-            video_path = os.path.join(VIDEOS_DIR, filename)
+            # Write MP4 video
+            with imageio.get_writer(video_path, fps=fps, codec='libx264', quality=8) as writer:
+                for frame_array in frame_arrays:
+                    writer.append_data(frame_array)
             
-            # Calculate proper output FPS to match desired duration
-            # SVD generates frames at actual_svd_fps, we want smooth playback matching intended duration
-            target_output_fps = max(8, min(24, len(video_frames) / max(1, target_duration_seconds)))  # Smooth mobile FPS
-            
-            # PREMIUM ENCODING: Maximum quality for mobile Reels with proper timing
-            with imageio.get_writer(
-                video_path, 
-                fps=target_output_fps,  # Proper FPS to match intended duration
-                codec='libx264',
-                output_params=[
-                    '-pix_fmt', 'yuv420p',
-                    '-profile:v', 'high', 
-                    '-level', '5.1',  # Higher level for better quality
-                    '-crf', '8',   # PREMIUM: Near-lossless quality (8-12 is visually lossless)
-                    '-preset', 'veryslow',  # PREMIUM: Maximum compression efficiency (takes more time)
-                    '-tune', 'stillimage',  # Optimize for product content
-                    '-movflags', '+faststart',  # Mobile/web optimization
-                    '-bf', '3',  # More B-frames for better compression
-                    '-g', str(int(target_output_fps)),  # Keyframe every second at target fps
-                    '-maxrate', '25M',  # PREMIUM: Very high bitrate for mobile quality
-                    '-bufsize', '50M',  # Large buffer for consistent premium quality
-                    '-refs', '6',  # More reference frames for better quality
-                    '-me_method', 'umh',  # Better motion estimation
-                    '-subq', '10',  # Maximum subpixel motion estimation
-                    '-trellis', '2',  # Maximum trellis quantization
-                    '-aq-mode', '3',  # Advanced adaptive quantization
-                    '-psy-rd', '1.0:0.15'  # Psychovisual optimizations for mobile screens
-                ]
-            ) as writer:
-                # Write original frames without interpolation to avoid artifacts
-                for frame in video_frames:
-                    writer.append_data(frame)
-            
-            file_size = os.path.getsize(video_path)
-            actual_video_duration = len(video_frames) / target_output_fps
-            logger.info("PREMIUM mobile Reels video generation completed", extra={
-                "video_filename": filename,
-                "file_size_bytes": file_size,
-                "file_size_mb": round(file_size / 1024 / 1024, 2),
-                "frames_generated": len(video_frames),
-                "output_fps": round(target_output_fps, 1),
-                "video_duration_seconds": round(actual_video_duration, 2),
-                "motion_intensity": motion_intensity,
-                "style": style,
-                "product_type": product_info.get("type", "unknown"),
-                "use_case": product_info.get("use_case", "unknown"),
-                "brand": product_info.get("brand", "unknown"),
-                "category": product_info.get("category", "unknown"),
-                "target_format": "mobile_reels_vertical",
-                "quality_mode": "premium_maximum",
-                "encoding_preset": "veryslow_premium",
-                "intelligent_prompting": True,
-                "mobile_optimized": True,
-                "use_case_motion_enhanced": True
+            logger.info("Video generation completed", extra={
+                "video_filename": video_filename,
+                "frames_generated": len(frames),
+                "file_size_mb": os.path.getsize(video_path) / (1024 * 1024)
             })
             
-            # Schedule cleanup after 15 minutes
-            video_timestamps[filename] = time.time()
-            cleanup_thread = threading.Thread(target=cleanup_video, args=(video_path, filename))
-            cleanup_thread.daemon = True
-            cleanup_thread.start()
-            
-            # Optionally unload SVD pipeline after generation to free memory
-            # (Can be re-enabled if needed for faster subsequent generations)
-            # model_manager.unload_svd_pipeline()
-            
-            return filename
+            return video_filename
             
     except Exception as e:
-        logger.error("AI video generation failed", extra={
-            "error": str(e),
-            "error_type": type(e).__name__
-        })
-        raise HTTPException(status_code=500, detail=f"AI video generation failed: {str(e)}")
-
-def cleanup_video(video_path: str, filename: str):
-    """Delete video file after 15 minutes"""
-    time.sleep(900)  # 15 minutes = 900 seconds
-    try:
-        if os.path.exists(video_path):
-            os.remove(video_path)
-            logger.info("Video cleaned up successfully", extra={
-                "video_filename": filename,
-                "video_path": video_path
-            })
-        # Remove from tracking dictionary
-        if filename in video_timestamps:
-            del video_timestamps[filename]
-    except Exception as e:
-        logger.error("Error cleaning up video", extra={
-            "video_filename": filename,
-            "video_path": video_path,
-            "error": str(e)
-        })
-
-def schedule_cleanup(video_path: str, filename: str):
-    """Schedule video cleanup in a background thread"""
-    cleanup_thread = threading.Thread(target=cleanup_video, args=(video_path, filename))
-    cleanup_thread.daemon = True
-    cleanup_thread.start()
-    logger.info("Video cleanup scheduled", extra={
-        "video_filename": filename,
-        "cleanup_in_minutes": 15
-    })
-
-@app.post("/generate")
-async def generate_video(data: VideoRequest):
-    """Generate video from image - REDIRECTS to AI generation when available"""
-    timer = None
-    try:
-        with TimingContext("video_generation_full", logger) as timer:
-            logger.info("Video generation request received", extra={
-                "animation_type": data.animation_type,
-                "duration": data.duration,
-                "fps": data.fps,
-                "style": data.style,
-                "has_image_url": bool(data.image_url),
-                "has_text_overlay": bool(data.text_overlay),
-                "has_brand_text": bool(data.brand_text),
-                "has_cta_text": bool(data.cta_text)
-            })
-            
-            if not data.image_url:
-                raise HTTPException(status_code=400, detail="image_url is required")
-            
-            # ENFORCE GPU-BASED AI GENERATION ONLY
-            if not svd_pipeline:
-                raise HTTPException(
-                    status_code=503, 
-                    detail="AI video generation not available - Stable Video Diffusion model not loaded"
-                )
-            
-            if device == "cpu":
-                raise HTTPException(
-                    status_code=503, 
-                    detail="GPU required for AI video generation - CPU fallback not allowed"
-                )
-            
-            # Use AI generation exclusively
-            logger.info("Using AI video generation", extra={
-                "device": device,
-                "svd_available": True,
-                "original_animation": data.animation_type
-            })
-            
-            # Download image for AI generation
-            image = download_image_from_url(data.image_url)
-            
-            # Focus on product-centered video generation with intelligent use case detection
-            logger.info("Creating intelligent product-focused video", extra={
-                "style": data.style,
-                "product_centered": True,
-                "intelligent_prompting": True
-            })
-            
-            # Let the AI generate an intelligent prompt based on product analysis
-            # The generate_ai_video_from_image function will analyze the product and create the prompt
-            prompt = ""  # Empty prompt will trigger intelligent generation
-            
-            # EXTREME MEMORY-OPTIMIZED: Ultra conservative frame count to prevent OOM
-            # SVD generates at ~8fps, use minimal frames for memory-constrained GPU
-            duration_frames = max(12, min(24, data.duration * 3))  # Extreme memory conservation
-            
-            # Run the heavy GPU computation in a thread pool to avoid blocking
-            import asyncio
-            loop = asyncio.get_event_loop()
-            filename = await loop.run_in_executor(
-                None, 
-                lambda: generate_ai_video_from_image(
-                    image=image,
-                    prompt=prompt,
-                    duration_frames=duration_frames,
-                    style=data.style,
-                    product_metadata=data.product_metadata,
-                    target_duration_seconds=data.duration
-                )
-            ) 
-            
-            return {
-                "filename": filename,
-                "download_url": f"/download/{filename}",
-                "expires_in_minutes": 15,
-                "file_size_mb": round(os.path.getsize(os.path.join(VIDEOS_DIR, filename)) / 1024 / 1024, 2),
-                "type": "ai_generated"
-            }
-
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        error_details = {
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "duration_ms": round(timer.duration_ms, 2) if timer else None,
-            "traceback": traceback.format_exc()
-        }
-        
-        logger.error("Unexpected error during video generation", extra=error_details)
+        logger.error(f"Video generation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
+    
+    finally:
+        # Memory cleanup after generation
+        if device == "cuda":
+            torch.cuda.empty_cache()
+            gc.collect()
 
-@app.post("/generate-from-upload")
-async def generate_video_from_upload(
-    file: UploadFile = File(...),
-    prompt: str = "professional product showcase with dynamic motion",
-    duration_frames: int = 25
-):
-    """Generate AI video from uploaded image file using Stable Video Diffusion"""
+@app.post("/generate-video", response_model=VideoGenerationResponse)
+async def generate_video(request: VideoGenerationRequest):
+    """Generate video from image URL and prompt"""
+    
+    logger.info("Video generation request received", extra={
+        "image_url": request.image_url,
+        "prompt": request.prompt,
+        "duration_seconds": request.duration_seconds
+    })
+    
     try:
-        logger.info("AI video generation from upload request received", extra={
-            "filename": file.filename,
-            "content_type": file.content_type,
-            "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
-            "duration_frames": duration_frames
-        })
-        
-        # Enforce GPU-only AI generation
-        if not svd_pipeline:
-            raise HTTPException(
-                status_code=503, 
-                detail="AI video generation not available - Stable Video Diffusion model not loaded"
-            )
-        
-        if device == "cpu":
-            raise HTTPException(
-                status_code=503, 
-                detail="GPU required for AI video generation - CPU fallback not allowed"
-            )
-        
-        # Validate file type
-        if not file.content_type.startswith("image/"):
-            raise HTTPException(status_code=400, detail="File must be an image")
-        
-        # Read and process uploaded image
-        contents = await file.read()
-        image = Image.open(BytesIO(contents)).convert('RGB')
-        
-        # Generate AI video
-        filename = generate_ai_video_from_image(
-            image=image,
-            prompt=prompt,
-            duration_frames=duration_frames,
-            target_duration_seconds=max(5, duration_frames // 8)  # Estimate duration from frames
-        )
-        
-        return {
-            "filename": filename,
-            "download_url": f"/download/{filename}",
-            "expires_in_minutes": 15,
-            "file_size_mb": round(os.path.getsize(os.path.join(VIDEOS_DIR, filename)) / 1024 / 1024, 2),
-            "type": "ai_generated"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("AI video generation from upload failed", extra={"error": str(e)})
-        raise HTTPException(status_code=500, detail=f"AI video generation failed: {str(e)}")
-
-@app.post("/generate-ai-video")
-async def generate_ai_video(request: AIVideoRequest):
-    """Generate AI video using Stable Video Diffusion"""
-    try:
-        logger.info("AI video generation request received", extra={
-            "image_url": request.image_url,
-            "prompt": request.prompt[:100] + "..." if len(request.prompt) > 100 else request.prompt,
-            "duration_frames": request.duration_frames
-        })
-        
         # Download image
         image = download_image_from_url(request.image_url)
         
-        # Generate AI video
-        filename = generate_ai_video_from_image(
-            image=image, 
-            prompt=request.prompt, 
-            duration_frames=request.duration_frames,
-            product_metadata=request.product_metadata,
-            target_duration_seconds=max(5, request.duration_frames // 8)  # Estimate duration from frames
+        # Generate video
+        video_filename = generate_video_from_image(
+            image=image,
+            prompt=request.prompt,
+            duration_seconds=request.duration_seconds
         )
         
-        return {
-            "filename": filename, 
-            "status": "success", 
-            "type": "ai_generated",
-            "download_url": f"/download/{filename}",
-            "expires_in_minutes": 15
-        }
+        # Construct video URL for download
+        video_url = f"/videos/{video_filename}"
+        
+        response = VideoGenerationResponse(
+            video_filename=video_filename,
+            video_url=video_url,
+            duration_seconds=request.duration_seconds,
+            status="success"
+        )
+        
+        logger.info("Video generation request completed successfully", extra={
+            "video_filename": video_filename,
+            "video_url": video_url
+        })
+        
+        return response
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("AI video generation failed", extra={"error": str(e)})
-        raise HTTPException(status_code=500, detail=f"AI video generation failed: {str(e)}")
+        logger.error(f"Unexpected error in video generation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@app.get("/download/{filename}")
-def download_video(filename: str, request: Request):
-    """Download endpoint for generated videos"""
-    with TimingContext("video_download", logger, {"video_filename": filename}):
-        client_ip = request.client.host if request.client else "unknown"
-        logger.info("Video download request", extra={
-            "video_filename": filename,
-            "client_ip": client_ip
-        })
-        
-        video_path = os.path.join(VIDEOS_DIR, filename)
-        
-        # Check if file exists
-        if not os.path.exists(video_path):
-            logger.warning("Video file not found", extra={
-                "video_filename": filename,
-                "video_path": video_path,
-                "client_ip": client_ip
-            })
-            raise HTTPException(status_code=404, detail="Video not found or has expired")
-        
-        # Check if video has expired (more than 15 minutes old)
-        if filename in video_timestamps:
-            creation_time = video_timestamps[filename]
-            elapsed_time = time.time() - creation_time
-            if elapsed_time > 900:  # 15 minutes
-                logger.info("Video has expired, cleaning up", extra={
-                    "video_filename": filename,
-                    "elapsed_minutes": round(elapsed_time / 60, 1),
-                    "client_ip": client_ip
-                })
-                try:
-                    os.remove(video_path)
-                    del video_timestamps[filename]
-                except Exception as e:
-                    logger.error("Error removing expired video", extra={
-                        "video_filename": filename,
-                        "error": str(e)
-                    })
-                raise HTTPException(status_code=404, detail="Video has expired")
-        
-        # Get file size for logging
-        try:
-            file_size = os.path.getsize(video_path)
-            logger.info("Video download successful", extra={
-                "video_filename": filename,
-                "client_ip": client_ip,
-                "file_size_bytes": file_size,
-                "file_size_mb": round(file_size / 1024 / 1024, 2)
-            })
-        except Exception as e:
-            logger.error("Error getting file size", extra={
-                "video_filename": filename,
-                "error": str(e)
-            })
-            file_size = 0
-        
-        return FileResponse(
-            path=video_path,
-            filename=filename,
-            media_type="video/mp4",
-            headers={
-                "Content-Length": str(file_size),
-                "Accept-Ranges": "bytes",
-                "Cache-Control": "public, max-age=3600"
-            }
-        )
-
-@app.get("/status/{filename}")
-def check_video_status(filename: str):
-    """Check if a video is still available"""
-    video_path = os.path.join(VIDEOS_DIR, filename)
-    
-    if not os.path.exists(video_path):
-        return {"status": "not_found", "message": "Video not found or has expired"}
-    
-    if filename in video_timestamps:
-        creation_time = video_timestamps[filename]
-        elapsed_time = time.time() - creation_time
-        remaining_time = max(0, 900 - elapsed_time)  # 15 minutes = 900 seconds
-        
-        if remaining_time > 0:
-            return {
-                "status": "available",
-                "remaining_minutes": round(remaining_time / 60, 1),
-                "download_url": f"/download/{filename}",
-                "file_size_mb": round(os.path.getsize(video_path) / 1024 / 1024, 2)
-            }
-        else:
-            return {"status": "expired", "message": "Video has expired"}
-    
-    return {"status": "unknown", "message": "Video status unknown"}
+@app.get("/model-status")
+async def get_model_status():
+    """Get current model loading status"""
+    return JSONResponse({
+        "svd_loaded": model_manager.svd_loaded,
+        "svd_available": SVD_AVAILABLE,
+        "device": device,
+        "cuda_available": torch.cuda.is_available()
+    })
 
 @app.post("/offload-svd")
-def offload_svd():
+async def offload_svd():
     """Manually offload SVD pipeline to free GPU memory"""
     try:
         model_manager.unload_svd_pipeline()
-        return {"status": "success", "message": "SVD pipeline offloaded successfully"}
+        return JSONResponse({"status": "success", "message": "SVD pipeline offloaded"})
     except Exception as e:
-        return {"status": "error", "message": f"Failed to offload SVD pipeline: {str(e)}"}
+        logger.error(f"Failed to offload SVD pipeline: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to offload SVD: {str(e)}")
 
 @app.post("/load-svd")
-def load_svd():
-    """Manually load SVD pipeline to GPU"""
+async def load_svd():
+    """Manually load SVD pipeline"""
     try:
         model_manager.load_svd_pipeline()
-        return {"status": "success", "message": "SVD pipeline loaded successfully"}
+        return JSONResponse({"status": "success", "message": "SVD pipeline loaded"})
     except Exception as e:
-        return {"status": "error", "message": f"Failed to load SVD pipeline: {str(e)}"}
+        logger.error(f"Failed to load SVD pipeline: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load SVD: {str(e)}")
 
-@app.get("/model-status")
-def model_status():
-    """Get current model loading status"""
-    if device == "cuda":
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        reserved = torch.cuda.memory_reserved() / 1024**3
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        available = total - allocated
-        
-        return {
-            "svd_loaded": model_manager.svd_loaded,
-            "gpu_memory": {
-                "allocated_gb": round(allocated, 2),
-                "reserved_gb": round(reserved, 2),
-                "total_gb": round(total, 2),
-                "available_gb": round(available, 2)
-            }
-        }
-    else:
-        return {"svd_loaded": model_manager.svd_loaded, "device": "cpu"}
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return JSONResponse({
+        "status": "healthy",
+        "service": "video-generator",
+        "version": "2.0.0",
+        "gpu_available": torch.cuda.is_available(),
+        "svd_available": SVD_AVAILABLE
+    })
 
-@app.get("/")
-def health_check():
-    """Health check endpoint - Dynamic GPU model loading AI video generation service"""
-    gpu_available = torch.cuda.is_available()
-    gpu_device_count = torch.cuda.device_count() if gpu_available else 0
-    current_device = str(device)
-    svd_loaded = bool(svd_pipeline)
-    service_ready = svd_loaded and gpu_available and device != "cpu"
-    
-    status = {
-        "status": "ready" if service_ready else "degraded", 
-        "service": "ai-video-generator",
-        "mode": "gpu_ai_only",
-        "timestamp": time.time(),
-        "gpu_available": gpu_available,
-        "gpu_device_count": gpu_device_count,
-        "current_device": current_device,
-        "svd_model_loaded": svd_loaded,
-        "image_model_loaded": bool(image_pipeline),
-        "model_scenes_available": bool(image_pipeline),
-        "service_ready": service_ready,
-        "requirements": {
-            "gpu_required": True,
-            "svd_model_required": True,
-            "image_model_optional": True,
-            "cpu_fallback": False
-        }
-    }
-    
-    if gpu_available:
-        try:
-            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            gpu_name = torch.cuda.get_device_name(0)
-            status["gpu_memory_gb"] = round(gpu_memory, 2)
-            status["gpu_name"] = gpu_name
-            
-            if torch.cuda.is_available():
-                allocated_memory = torch.cuda.memory_allocated(0) / 1024**3
-                cached_memory = torch.cuda.memory_reserved(0) / 1024**3
-                status["gpu_memory_allocated_gb"] = round(allocated_memory, 2)
-                status["gpu_memory_cached_gb"] = round(cached_memory, 2)
-        except Exception:
-            pass
-    
-    if not service_ready:
-        status["issues"] = []
-        if not gpu_available:
-            status["issues"].append("GPU not available")
-        if device == "cpu":
-            status["issues"].append("Service running on CPU - GPU required")
-        if not svd_loaded:
-            status["issues"].append("Stable Video Diffusion model not loaded")
-    
-    return status
-
-logger.info("Video generator service ready")
+if __name__ == "__main__":
+    import uvicorn
+    logger.info("Starting Video Generator Service v2.0.0")
+    uvicorn.run(app, host="0.0.0.0", port=5002)
