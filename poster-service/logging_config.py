@@ -26,9 +26,10 @@ class StructuredFormatter(logging.Formatter):
         if req_id:
             log_entry["request_id"] = req_id
             
-        # Add extra fields if present
+        # Add extra fields if present (exclude 'message' to prevent LogRecord overwrite)
         if hasattr(record, 'extra'):
-            log_entry.update(record.extra)
+            extra_fields = {k: v for k, v in record.extra.items() if k != 'message'}
+            log_entry.update(extra_fields)
             
         # Add exception info if present
         if record.exc_info:
@@ -66,9 +67,10 @@ def setup_logging(service_name: str = "poster-service", log_level: str = "INFO")
             if req_id:
                 log_entry["request_id"] = req_id
                 
-            # Add extra fields if present
+            # Add extra fields if present (exclude 'message' to prevent LogRecord overwrite)
             if hasattr(record, 'extra'):
-                log_entry.update(record.extra)
+                extra_fields = {k: v for k, v in record.extra.items() if k != 'message'}
+                log_entry.update(extra_fields)
                 
             # Add exception info if present
             if record.exc_info:

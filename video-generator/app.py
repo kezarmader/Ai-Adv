@@ -104,7 +104,7 @@ class DynamicModelManager:
                 log_gpu_usage(logger, "before_svd_load")
             
             try:
-                # Load SVD 1.1 - Better quality model (25 frames vs 14 frames)
+                # Load SVD 1.1 - Superior model with your authorized token
                 self.svd_pipeline = StableVideoDiffusionPipeline.from_pretrained(
                     "stabilityai/stable-video-diffusion-img2vid-xt-1-1",
                     torch_dtype=torch.float16,

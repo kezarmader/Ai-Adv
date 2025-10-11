@@ -264,7 +264,7 @@ async def run_ad_campaign(req: Request):
                 "features": ad_text['features'],
                 "brand_text": ad_text.get('suggested_brand_text', ad_text.get('product', '')),
                 "cta_text": ad_text.get('suggested_cta', 'Shop Now'),
-                "scene": ad_text['scene']
+                "scene": ad_text.get('generated_scene', ad_text.get('scene', 'Professional product showcase'))
             }
             
             logger.info("Image generation prompt prepared", extra={
