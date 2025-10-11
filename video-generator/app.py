@@ -110,9 +110,12 @@ class DynamicModelManager:
                     torch_dtype=torch.float16,
                     variant="fp16",
                     use_safetensors=True,
-                    device_map="auto",
                     token=os.getenv("HF_TOKEN")
                 )
+                
+                # Move to GPU manually instead of device_map='auto'
+                if self.device == "cuda":
+                    self.svd_pipeline = self.svd_pipeline.to("cuda")
                 
                 # Enable memory efficient attention
                 self.svd_pipeline.enable_model_cpu_offload()
