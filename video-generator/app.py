@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 import uuid
 import time
@@ -16,6 +17,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+# Add shared directory to path for GPU memory manager
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'shared'))
+from gpu_memory_manager import get_gpu_manager, ModelType
+
 # Import video generation libraries
 try:
     from diffusers import StableVideoDiffusionPipeline
@@ -28,6 +33,9 @@ from logging_config import setup_logging, TimingContext, log_gpu_usage
 
 # Configure logging
 logger = setup_logging("video-generator", "INFO")
+
+# Initialize GPU Memory Manager
+gpu_manager = get_gpu_manager(logger)
 
 # Initialize FastAPI app
 app = FastAPI(title="AI Video Generator Service", version="2.0.0")
@@ -151,34 +159,6 @@ class DynamicModelManager:
         if not self.svd_loaded:
             self.load_svd_pipeline()
         return self.svd_pipeline
-    
-    def request_llm_offload(self):
-        """Request that the LLM service offload its models to free GPU memory"""
-        try:
-            response = requests.post("http://llm-service:11434/api/offload", timeout=30)
-            if response.status_code == 200:
-                logger.info("LLM models offloaded successfully")
-                return True
-            else:
-                logger.warning(f"LLM offload request failed: {response.status_code}")
-                return False
-        except Exception as e:
-            logger.warning(f"Could not request LLM offload: {e}")
-            return False
-    
-    def request_image_generator_offload(self):
-        """Request that the image generator offload its models to free GPU memory"""
-        try:
-            response = requests.post("http://image-generator:5001/offload-to-cpu", timeout=30)
-            if response.status_code == 200:
-                logger.info("Image generator models offloaded successfully")
-                return True
-            else:
-                logger.warning(f"Image generator offload request failed: {response.status_code}")
-                return False
-        except Exception as e:
-            logger.warning(f"Could not request image generator offload: {e}")
-            return False
 
 # Initialize model manager
 model_manager = DynamicModelManager()
@@ -209,17 +189,9 @@ def generate_video_from_image(image: Image.Image, prompt: str, duration_seconds:
     if device == "cpu":
         raise HTTPException(status_code=503, detail="GPU required for AI video generation")
     
-    # Request model offloads to free GPU memory for video generation
-    logger.info("Requesting model offloads for video generation")
-    model_manager.request_llm_offload()
-    model_manager.request_image_generator_offload()  # This is the critical one!
-    time.sleep(3)  # Wait for offloads to complete
-    
-    # Aggressive memory cleanup
-    if device == "cuda":
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-        gc.collect()
+    # Request GPU space for video generation using centralized manager
+    logger.info("Requesting GPU space for video generation")
+    gpu_manager.request_model_access(ModelType.VIDEO, required_memory_gb=14.0)
     
     try:
         with TimingContext("video_generation", logger):
@@ -229,7 +201,7 @@ def generate_video_from_image(image: Image.Image, prompt: str, duration_seconds:
                 "image_size": image.size
             })
             
-            # Get SVD pipeline (loads if needed)
+            # Get SVD pipeline (should already be loaded by GPU manager)
             svd_pipeline = model_manager.get_svd_pipeline()
             
             # Resize image to SVD requirements (1024x576 for optimal performance)
@@ -297,10 +269,9 @@ def generate_video_from_image(image: Image.Image, prompt: str, duration_seconds:
         raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
     
     finally:
-        # Memory cleanup after generation
-        if device == "cuda":
-            torch.cuda.empty_cache()
-            gc.collect()
+        # Release video model access and cleanup
+        gpu_manager.release_model_access(ModelType.VIDEO, keep_loaded=False)
+        logger.info("Video generation completed, GPU memory released")
 
 @app.post("/generate-video", response_model=VideoGenerationResponse)
 async def generate_video(request: VideoGenerationRequest):
@@ -365,6 +336,51 @@ async def offload_svd():
     except Exception as e:
         logger.error(f"Failed to offload SVD pipeline: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to offload SVD: {str(e)}")
+
+@app.get("/gpu-status")
+async def get_gpu_status():
+    """Get GPU memory and model status"""
+    try:
+        status = gpu_manager.get_status()
+        return JSONResponse(status)
+    except Exception as e:
+        logger.error(f"Failed to get GPU status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get GPU status: {str(e)}")
+
+@app.post("/request-gpu-access/{model_type}")
+async def request_gpu_access(model_type: str, required_memory_gb: Optional[float] = None):
+    """Manually request GPU access for a model type"""
+    try:
+        model_enum = ModelType(model_type.lower())
+        success = gpu_manager.request_model_access(model_enum, required_memory_gb)
+        
+        return JSONResponse({
+            "status": "success" if success else "failed",
+            "model_type": model_type,
+            "required_memory_gb": required_memory_gb,
+            "message": f"GPU access {'granted' if success else 'denied'} for {model_type}"
+        })
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid model type: {model_type}")
+    except Exception as e:
+        logger.error(f"Failed to request GPU access: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to request GPU access: {str(e)}")
+
+@app.post("/load-svd")
+async def load_svd():
+    """Load SVD pipeline to GPU using memory manager"""
+    try:
+        # Load the SVD pipeline directly
+        model_manager.load_svd_pipeline()
+        
+        # Update GPU manager state
+        gpu_manager.models[ModelType.VIDEO].is_loaded = model_manager.svd_loaded
+        gpu_manager.models[ModelType.VIDEO].last_used = time.time()
+        
+        return JSONResponse({"status": "success", "message": "SVD pipeline loaded"})
+    except Exception as e:
+        logger.error(f"Failed to load SVD pipeline: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load SVD: {str(e)}")
 
 @app.post("/load-svd")
 async def load_svd():

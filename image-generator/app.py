@@ -15,9 +15,17 @@ from logging_config import (
     setup_logging, TimingContext, generate_request_id, request_id,
     log_gpu_usage, log_image_generation_metrics
 )
+import sys
+
+# Add shared directory to path for GPU memory manager
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'shared'))
+from gpu_memory_manager import get_gpu_manager, ModelType
 
 # Setup structured logging
 logger = setup_logging("image-generator", "INFO" )
+
+# Initialize GPU Memory Manager
+gpu_manager = get_gpu_manager(logger)
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     """Middleware to log all HTTP requests and responses"""
@@ -232,6 +240,9 @@ def generate_ad(data: ImagePrompt):
                 "brand_text": data.brand_text[:50] + "..." if len(data.brand_text) > 50 else data.brand_text,
                 "cta_text": data.cta_text[:50] + "..." if len(data.cta_text) > 50 else data.cta_text
             })
+            
+            # Request GPU access for image generation
+            gpu_manager.request_model_access(ModelType.IMAGE, required_memory_gb=16.0)
             
             log_gpu_usage(logger, "before_generation")
             # 1. Build the prompt
@@ -512,6 +523,9 @@ def offload_models_to_cpu():
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+        
+        # Update GPU manager state
+        gpu_manager.models[ModelType.IMAGE].is_loaded = False
             
         log_gpu_usage(logger, "after_cpu_offload")
         
@@ -537,6 +551,10 @@ def reload_models_to_gpu():
         if 'refiner' in globals() and refiner is not None:
             refiner = refiner.to('cuda')
             logger.info("Refiner model moved to GPU")
+        
+        # Update GPU manager state
+        gpu_manager.models[ModelType.IMAGE].is_loaded = True
+        gpu_manager.models[ModelType.IMAGE].last_used = time.time()
             
         log_gpu_usage(logger, "after_gpu_reload")
         
