@@ -46,7 +46,7 @@ ENV CUDA_LAUNCH_BLOCKING=1
 ENV TORCH_USE_CUDA_DSA=1
 
 # Expose port
-EXPOSE 5003
+EXPOSE 5002
 
 # Run the application
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5003"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5002"]
