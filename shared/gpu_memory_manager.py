@@ -76,8 +76,16 @@ class GPUMemoryManager:
                 memory_allocated = torch.cuda.memory_allocated() / (1024**3)
                 memory_reserved = torch.cuda.memory_reserved() / (1024**3)
                 total_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                memory_free = total_memory - memory_allocated  # Use allocated, not reserved
-                return memory_allocated, memory_reserved, memory_free
+                
+                # In multi-container setup, we can only see our own process memory
+                # Calculate estimated free memory based on loaded models
+                estimated_used_memory = sum(
+                    model.estimated_memory_gb for model in self.models.values() 
+                    if model.is_loaded and model.model_type != ModelType.VIDEO
+                )
+                memory_free = total_memory - estimated_used_memory - memory_reserved
+                
+                return memory_allocated, memory_reserved, max(0.0, memory_free)
             return 0.0, 0.0, 32.0  # Default for RTX 5090
         except Exception as e:
             self.logger.warning(f"Could not get GPU memory info: {e}")
@@ -221,15 +229,21 @@ class GPUMemoryManager:
         
         self.log_memory_status(f"before {requesting_model.value} load")
         
-        # Get models that need to be offloaded
-        models_to_offload = self.get_models_to_offload(requesting_model, required_memory_gb)
+        # For video generation, be aggressive - offload ALL other models
+        if requesting_model == ModelType.VIDEO:
+            models_to_offload = [model_type for model_type in [ModelType.LLM, ModelType.IMAGE] 
+                                if self.models[model_type].is_loaded]
+            self.logger.info(f"Video model requested - offloading all other models: {[m.value for m in models_to_offload]}")
+        else:
+            # Get models that need to be offloaded using normal logic
+            models_to_offload = self.get_models_to_offload(requesting_model, required_memory_gb)
         
         # Offload models in order
         for model_type in models_to_offload:
             success = self.offload_model(model_type)
             if success:
                 self.free_gpu_memory()
-                time.sleep(1)  # Brief pause for memory cleanup
+                time.sleep(2)  # Longer pause for video generation
             else:
                 self.logger.warning(f"Failed to offload {model_type.value}, continuing anyway")
         
