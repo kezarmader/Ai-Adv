@@ -16,7 +16,7 @@ RUN pip install --upgrade pip && \
 	pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Install other requirements (excluding torch already installed)
-COPY requirements.txt .
+COPY image-generator/requirements.txt .
 RUN grep -v 'torch' requirements.txt > temp_requirements.txt && \
     pip install -r temp_requirements.txt --no-cache-dir
 
@@ -27,9 +27,10 @@ RUN mkdir -p $HF_HOME
 RUN mkdir -p /app/images && chmod 755 /app/images
 
 # Copy shared GPU memory manager
-COPY ../shared/gpu_memory_manager.py .
+COPY shared/gpu_memory_manager.py .
 
-COPY . .
+# Copy application code
+COPY image-generator/ .
 
 # Optional debugging flags
 ENV CUDA_LAUNCH_BLOCKING=1

@@ -17,8 +17,7 @@ from logging_config import (
 )
 import sys
 
-# Add shared directory to path for GPU memory manager
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'shared'))
+# Import local GPU memory manager
 from gpu_memory_manager import get_gpu_manager, ModelType
 
 # Setup structured logging

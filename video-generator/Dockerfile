@@ -20,7 +20,7 @@ RUN apt update && apt install -y \
 ENV TORCH_CUDA_ARCH_LIST="8.9;9.0;12.0"
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY video-generator/requirements.txt .
 
 # Upgrade pip and install nightly PyTorch with CUDA 12.8 (RTX 5090 support)
 RUN pip install --upgrade pip && \
@@ -31,10 +31,10 @@ RUN grep -v 'torch' requirements.txt > temp_requirements.txt && \
     pip install -r temp_requirements.txt --no-cache-dir
 
 # Copy shared GPU memory manager
-COPY ../shared/gpu_memory_manager.py .
+COPY shared/gpu_memory_manager.py .
 
 # Copy application code
-COPY . .
+COPY video-generator/ .
 
 # Create directories for videos and temp files
 RUN mkdir -p /app/videos /app/temp && chmod 755 /app/videos /app/temp

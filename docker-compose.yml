@@ -23,7 +23,9 @@ services:
     entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 3 && ollama pull llama3 && wait"]
 
   image-generator:
-    build: ./image-generator
+    build:
+      context: .
+      dockerfile: ./image-generator/Dockerfile
     runtime: nvidia
     environment:
       NVIDIA_VISIBLE_DEVICES: "0"
@@ -41,13 +43,17 @@ services:
             - capabilities: [gpu]
 
   poster-service:
-    build: ./poster-service
+    build:
+      context: .
+      dockerfile: ./poster-service/Dockerfile
     networks: [app-net]
     expose:
       - "5002"
 
   video-generator:
-    build: ./video-generator
+    build:
+      context: .
+      dockerfile: ./video-generator/Dockerfile
     runtime: nvidia
     environment:
       NVIDIA_VISIBLE_DEVICES: "0"
@@ -65,14 +71,18 @@ services:
             - capabilities: [gpu]
 
   asin-extractor:
-    build: ./asin-extractor
+    build:
+      context: .
+      dockerfile: ./asin-extractor/Dockerfile
     networks: [app-net]
     expose:
       - "5004"
     restart: unless-stopped
 
   orchestrator:
-    build: ./orchestrator
+    build:
+      context: .
+      dockerfile: ./orchestrator/Dockerfile
     depends_on:
       - llm-service
       - image-generator
