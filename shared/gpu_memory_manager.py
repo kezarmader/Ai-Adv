@@ -61,8 +61,8 @@ class GPUMemoryManager:
             ModelType.VIDEO: ModelInfo(
                 model_type=ModelType.VIDEO,
                 service_name="video-generator",
-                offload_endpoint="http://video-generator:5002/offload-svd",
-                reload_endpoint="http://video-generator:5002/load-svd",  # We'll need to create this
+                offload_endpoint="http://video-generator:5003/offload-svd",
+                reload_endpoint="http://video-generator:5003/load-svd",  # We'll need to create this
                 estimated_memory_gb=12.0,
                 priority=3,  # Highest priority
                 is_loaded=False  # Loaded on demand
@@ -75,13 +75,29 @@ class GPUMemoryManager:
             if torch.cuda.is_available():
                 memory_allocated = torch.cuda.memory_allocated() / (1024**3)
                 memory_reserved = torch.cuda.memory_reserved() / (1024**3)
-                memory_free = (torch.cuda.get_device_properties(0).total_memory / (1024**3)) - memory_reserved
+                total_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                memory_free = total_memory - memory_allocated  # Use allocated, not reserved
                 return memory_allocated, memory_reserved, memory_free
             return 0.0, 0.0, 32.0  # Default for RTX 5090
         except Exception as e:
             self.logger.warning(f"Could not get GPU memory info: {e}")
             return 0.0, 0.0, 32.0
     
+    def notify_model_loaded(self, model_type: ModelType):
+        """Notify the GPU manager that a model has been loaded by the service"""
+        model_info = self.models.get(model_type)
+        if model_info:
+            model_info.is_loaded = True
+            model_info.last_used = time.time()
+            self.logger.info(f"Model {model_type.value} marked as loaded")
+    
+    def notify_model_offloaded(self, model_type: ModelType):
+        """Notify the GPU manager that a model has been offloaded by the service"""
+        model_info = self.models.get(model_type)
+        if model_info:
+            model_info.is_loaded = False
+            self.logger.info(f"Model {model_type.value} marked as offloaded")
+
     def log_memory_status(self, context: str = ""):
         """Log current GPU memory status"""
         allocated, reserved, free = self.get_gpu_memory_info()
@@ -229,18 +245,24 @@ class GPUMemoryManager:
         
         self.logger.info(f"Requesting access to {requesting_model.value} model")
         
-        # Ensure GPU space
+        # Ensure GPU space by offloading other models
         self.ensure_gpu_space(requesting_model, required_memory_gb)
         
-        # Load the requesting model if not already loaded
-        model_info = self.models.get(requesting_model)
-        if model_info and not model_info.is_loaded:
-            success = self.load_model(requesting_model)
-            if not success:
-                self.logger.error(f"Failed to load {requesting_model.value} model")
-                return False
+        # For VIDEO model, don't auto-load via HTTP - let the service handle it
+        # This prevents double-loading conflicts
+        if requesting_model == ModelType.VIDEO:
+            self.logger.info("GPU space prepared for video model - service will handle loading")
+        else:
+            # Load the requesting model if not already loaded
+            model_info = self.models.get(requesting_model)
+            if model_info and not model_info.is_loaded:
+                success = self.load_model(requesting_model)
+                if not success:
+                    self.logger.error(f"Failed to load {requesting_model.value} model")
+                    return False
         
         # Update usage tracking
+        model_info = self.models.get(requesting_model)
         if model_info:
             model_info.last_used = time.time()
         

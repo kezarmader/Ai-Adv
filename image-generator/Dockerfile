@@ -26,6 +26,9 @@ RUN mkdir -p $HF_HOME
 # Create images directory with proper permissions
 RUN mkdir -p /app/images && chmod 755 /app/images
 
+# Copy shared GPU memory manager
+COPY ../shared/gpu_memory_manager.py .
+
 COPY . .
 
 # Optional debugging flags

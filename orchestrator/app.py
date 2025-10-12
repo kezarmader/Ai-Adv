@@ -341,7 +341,7 @@ async def run_ad_campaign(req: Request):
                         "duration_seconds": video_prompt["duration_seconds"]
                     })
                     
-                    video_response = requests.post(f"http://video-generator:5002{endpoint}", json=video_prompt)
+                    video_response = requests.post(f"http://video-generator:5003{endpoint}", json=video_prompt)
                     duration_ms = (time.time() - start_time) * 1000
                     
                     logger.info("Video generation request completed", extra={
@@ -358,7 +358,7 @@ async def run_ad_campaign(req: Request):
                         if video_filename:
                             host = req.headers.get("host", "localhost:8000")
                             # Use video-generator's direct URL for MP4 download
-                            video_url = f"http://video-generator:5002/videos/{video_filename}"
+                            video_url = f"http://video-generator:5003/videos/{video_filename}"
                             logger.info("Video URL constructed", extra={
                                 "video_filename": video_filename,
                                 "video_url": video_url
@@ -515,7 +515,7 @@ async def download_video(filename: str, request: Request):
             
             # Make request to video-generator service
             start_time = time.time()
-            video_response = requests.get(f"http://video-generator:5002/videos/{filename}")
+            video_response = requests.get(f"http://video-generator:5003/videos/{filename}")
             duration_ms = (time.time() - start_time) * 1000
             
             logger.debug("Video download request completed", extra={
@@ -615,7 +615,7 @@ async def generate_video_only(req: Request):
                     "duration_seconds": duration
                 }
                 
-                video_response = requests.post("http://video-generator:5002/generate-video", json=video_prompt)
+                video_response = requests.post("http://video-generator:5003/generate-video", json=video_prompt)
                 duration_ms = (time.time() - start_time) * 1000
                 
                 logger.info("Video generation request completed", extra={
@@ -637,7 +637,7 @@ async def generate_video_only(req: Request):
                     raise ValueError("Error generating video filename")
                 
                 # Use video-generator's direct URL for MP4 download
-                video_url = f"http://video-generator:5002/videos/{filename}"
+                video_url = f"http://video-generator:5003/videos/{filename}"
                 
                 logger.info("Video URL constructed", extra={
                     "video_filename": filename,

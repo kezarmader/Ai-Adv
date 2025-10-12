@@ -86,7 +86,16 @@ class DynamicModelManager:
         """Unload SVD pipeline from GPU to free memory"""
         if self.svd_pipeline is not None:
             logger.info("Unloading SVD pipeline from GPU memory")
-            self.svd_pipeline.to("cpu")
+            
+            # Note: With enable_sequential_cpu_offload(), components are already on CPU when not in use
+            # We just need to remove hooks and delete the pipeline
+            try:
+                # Remove CPU offload hooks
+                self.svd_pipeline.remove_all_hooks()
+            except:
+                pass  # Hooks might not exist
+            
+            # Delete the pipeline completely
             del self.svd_pipeline
             self.svd_pipeline = None
             self.svd_loaded = False
@@ -98,6 +107,12 @@ class DynamicModelManager:
                 log_gpu_usage(logger, "after_svd_unload")
                 
             logger.info("SVD pipeline unloaded successfully")
+            
+            # Notify GPU manager that video model is offloaded
+            try:
+                gpu_manager.notify_model_offloaded(ModelType.VIDEO)
+            except Exception as e:
+                logger.warning(f"Failed to notify GPU manager of video model offload: {e}")
     
     def load_svd_pipeline(self):
         """Load SVD pipeline to GPU when needed"""
@@ -121,12 +136,9 @@ class DynamicModelManager:
                     token=os.getenv("HF_TOKEN")
                 )
                 
-                # Move to GPU manually instead of device_map='auto'
-                if self.device == "cuda":
-                    self.svd_pipeline = self.svd_pipeline.to("cuda")
-                
                 # Enable memory efficient optimizations for SVD 1.1
                 # Use sequential CPU offload for maximum memory efficiency
+                # This automatically manages GPU/CPU transfers during inference
                 self.svd_pipeline.enable_sequential_cpu_offload()
                 
                 # Enable attention slicing for memory efficiency
@@ -147,6 +159,12 @@ class DynamicModelManager:
                 
                 self.svd_loaded = True
                 logger.info("SVD pipeline loaded successfully")
+                
+                # Notify GPU manager that video model is loaded
+                try:
+                    gpu_manager.notify_model_loaded(ModelType.VIDEO)
+                except Exception as e:
+                    logger.warning(f"Failed to notify GPU manager of video model load: {e}")
                 
             except Exception as e:
                 logger.error(f"Failed to load SVD pipeline: {e}")
@@ -270,6 +288,7 @@ def generate_video_from_image(image: Image.Image, prompt: str, duration_seconds:
     
     finally:
         # Release video model access and cleanup
+        # Release GPU access after generation
         gpu_manager.release_model_access(ModelType.VIDEO, keep_loaded=False)
         logger.info("Video generation completed, GPU memory released")
 
@@ -351,7 +370,7 @@ async def get_gpu_status():
 async def request_gpu_access(model_type: str, required_memory_gb: Optional[float] = None):
     """Manually request GPU access for a model type"""
     try:
-        model_enum = ModelType(model_type.lower())
+        model_enum = ModelType(model_type.upper())
         success = gpu_manager.request_model_access(model_enum, required_memory_gb)
         
         return JSONResponse({
@@ -382,16 +401,6 @@ async def load_svd():
         logger.error(f"Failed to load SVD pipeline: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to load SVD: {str(e)}")
 
-@app.post("/load-svd")
-async def load_svd():
-    """Manually load SVD pipeline"""
-    try:
-        model_manager.load_svd_pipeline()
-        return JSONResponse({"status": "success", "message": "SVD pipeline loaded"})
-    except Exception as e:
-        logger.error(f"Failed to load SVD pipeline: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to load SVD: {str(e)}")
-
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -406,4 +415,4 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting Video Generator Service v2.0.0")
-    uvicorn.run(app, host="0.0.0.0", port=5002)
+    uvicorn.run(app, host="0.0.0.0", port=5003)

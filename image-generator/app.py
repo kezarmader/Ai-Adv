@@ -524,8 +524,8 @@ def offload_models_to_cpu():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
         
-        # Update GPU manager state
-        gpu_manager.models[ModelType.IMAGE].is_loaded = False
+        # Notify GPU manager that image model is offloaded
+        gpu_manager.notify_model_offloaded(ModelType.IMAGE)
             
         log_gpu_usage(logger, "after_cpu_offload")
         
@@ -552,9 +552,8 @@ def reload_models_to_gpu():
             refiner = refiner.to('cuda')
             logger.info("Refiner model moved to GPU")
         
-        # Update GPU manager state
-        gpu_manager.models[ModelType.IMAGE].is_loaded = True
-        gpu_manager.models[ModelType.IMAGE].last_used = time.time()
+        # Notify GPU manager that image model is loaded
+        gpu_manager.notify_model_loaded(ModelType.IMAGE)
             
         log_gpu_usage(logger, "after_gpu_reload")
         

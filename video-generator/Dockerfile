@@ -30,6 +30,9 @@ RUN pip install --upgrade pip && \
 RUN grep -v 'torch' requirements.txt > temp_requirements.txt && \
     pip install -r temp_requirements.txt --no-cache-dir
 
+# Copy shared GPU memory manager
+COPY ../shared/gpu_memory_manager.py .
+
 # Copy application code
 COPY . .
 
@@ -46,7 +49,7 @@ ENV CUDA_LAUNCH_BLOCKING=1
 ENV TORCH_USE_CUDA_DSA=1
 
 # Expose port
-EXPOSE 5002
+EXPOSE 5003
 
 # Run the application
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5002"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5003"]
