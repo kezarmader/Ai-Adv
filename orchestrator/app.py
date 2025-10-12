@@ -116,21 +116,38 @@ async def run_ad_campaign(req: Request):
 
             # Step 1: Extract product details from Amazon ASIN
             with TimingContext("asin_extraction", logger):
-                logger.info("Extracting product information from ASIN")
-                
-                asin_response = requests.post("http://asin-extractor:5004/extract-asin", json={
-                    "asin": asin
+                logger.info("Extracting product information from ASIN", extra={
+                    "asin": asin,
+                    "asin_extractor_url": "http://asin-extractor:5004/extract-asin"
                 })
                 
-                if asin_response.status_code != 200:
-                    logger.error("ASIN extraction failed", extra={
+                try:
+                    asin_response = requests.post("http://asin-extractor:5004/extract-asin", json={
+                        "asin": asin
+                    }, timeout=30)
+                    
+                    logger.info("ASIN extraction response received", extra={
                         "status_code": asin_response.status_code,
-                        "response": asin_response.text[:200]
+                        "response_size": len(asin_response.text) if asin_response.text else 0
                     })
-                    raise HTTPException(status_code=500, detail=f"ASIN extraction failed: {asin_response.status_code}")
-                
-                asin_data = asin_response.json()
-                product_info = asin_data["product_info"]
+                    
+                    if asin_response.status_code != 200:
+                        logger.error("ASIN extraction failed", extra={
+                            "asin": asin,
+                            "status_code": asin_response.status_code,
+                            "response": asin_response.text[:500]
+                        })
+                        raise HTTPException(status_code=500, detail=f"ASIN extraction failed: {asin_response.status_code}")
+                    
+                    asin_data = asin_response.json()
+                    product_info = asin_data["product_info"]
+                    
+                except requests.RequestException as e:
+                    logger.error("Network error during ASIN extraction", extra={
+                        "asin": asin,
+                        "error": str(e)
+                    })
+                    raise HTTPException(status_code=503, detail=f"ASIN extractor service unavailable: {str(e)}")
                 
                 logger.info("Product information extracted successfully", extra={
                     "product_title": product_info.get("title", "")[:50] + "..." if product_info.get("title") else "N/A",
@@ -258,41 +275,86 @@ async def run_ad_campaign(req: Request):
             if ad_text is None:
                 raise HTTPException(status_code=500, detail="Failed to parse LLM response after all retry attempts")
 
-            # Prepare image generation prompt
-            image_prompt = {
-                "product_name": ad_text['product'],
-                "features": ad_text['features'],
-                "brand_text": ad_text.get('suggested_brand_text', ad_text.get('product', '')),
-                "cta_text": ad_text.get('suggested_cta', 'Shop Now'),
-                "scene": ad_text.get('generated_scene', ad_text.get('scene', 'Professional product showcase'))
-            }
+            # Decide whether to use Amazon product image or generate new image
+            if use_product_image and product_images:
+                # Use real Amazon product image
+                with TimingContext("image_download_from_amazon", logger):
+                    selected_image_url = product_images[0]  # Use first Amazon product image
+                    
+                    logger.info("Downloading Amazon product image", extra={
+                        "amazon_image_url": selected_image_url,
+                        "product_title": product_title
+                    })
+                    
+                    # Download the Amazon image via image-generator service
+                    download_prompt = {
+                        "image_url": selected_image_url,
+                        "product_name": product_title,
+                        "save_as_product_image": True
+                    }
+                    
+                    start_time = time.time()
+                    image_response = requests.post("http://image-generator:5001/download-product-image", json=download_prompt)
+                    duration_ms = (time.time() - start_time) * 1000
+                    
+                    logger.info("Amazon image download request completed", extra={
+                        "service": "image-generator",
+                        "endpoint": "/download-product-image", 
+                        "status_code": image_response.status_code,
+                        "duration_ms": round(duration_ms, 2)
+                    })
+                    
+                    if image_response.status_code != 200:
+                        logger.warning("Failed to download Amazon image, falling back to AI generation")
+                        use_product_image = False  # Fall back to AI generation
+                    else:
+                        response_data = image_response.json()
+                        filename = response_data.get("filename", "")
+                        
+                        logger.info("Amazon product image downloaded successfully", extra={
+                            "filename": filename,
+                            "source": "amazon_product_image"
+                        })
             
-            logger.info("Image generation prompt prepared", extra={
-                "prompt_size": len(json.dumps(image_prompt))
-            })
-
-            # Image Generator call
-            with TimingContext("image_generation", logger) as img_timer:
-                start_time = time.time()
-                image_response = requests.post("http://image-generator:5001/generate", json=image_prompt)
-                duration_ms = (time.time() - start_time) * 1000
+            if not use_product_image or not product_images:
+                # Generate new AI image
+                logger.info("Generating AI image (no product image available or not requested)")
                 
-                logger.info("Image generation request completed", extra={
-                    "service": "image-generator",
-                    "endpoint": "/generate",
-                    "status_code": image_response.status_code,
-                    "duration_ms": round(duration_ms, 2),
+                image_prompt = {
+                    "product_name": ad_text['product'],
+                    "features": ad_text['features'],
+                    "brand_text": ad_text.get('suggested_brand_text', ad_text.get('product', '')),
+                    "cta_text": ad_text.get('suggested_cta', 'Shop Now'),
+                    "scene": ad_text.get('generated_scene', ad_text.get('scene', 'Professional product showcase'))
+                }
+                
+                logger.info("Image generation prompt prepared", extra={
                     "prompt_size": len(json.dumps(image_prompt))
                 })
-                
-                if image_response.status_code != 200:
-                    raise HTTPException(status_code=500, detail=f"Image generation error: {image_response.status_code}")
+
+                # Image Generator call
+                with TimingContext("image_generation", logger) as img_timer:
+                    start_time = time.time()
+                    image_response = requests.post("http://image-generator:5001/generate", json=image_prompt)
+                    duration_ms = (time.time() - start_time) * 1000
+                    
+                    logger.info("Image generation request completed", extra={
+                        "service": "image-generator",
+                        "endpoint": "/generate",
+                        "status_code": image_response.status_code,
+                        "duration_ms": round(duration_ms, 2),
+                        "prompt_size": len(json.dumps(image_prompt))
+                    })
+                    
+                    if image_response.status_code != 200:
+                        raise HTTPException(status_code=500, detail=f"Image generation error: {image_response.status_code}")
+
+                # Parse image response to get filename
+                response_data = image_response.json()
+                filename = response_data.get("filename", "")
 
             # Process image response
             with TimingContext("image_response_processing", logger):
-                response_data = image_response.json()
-                filename = response_data.get("filename", "")
-                
                 if filename == '' or filename == None:
                     raise ValueError(f'Error generating filename: {filename}')
                 
@@ -316,16 +378,21 @@ async def run_ad_campaign(req: Request):
                         # Use Amazon product image for AI video generation
                         selected_image = product_images[0]  # Use first product image
                         image_source = selected_image
-                        prompt_context = f"Dramatic product showcase for {ad_text.get('product', 'this product')}. {ad_text.get('video_scene', 'Dynamic camera movements highlighting product features with professional lighting and cinematic effects.')}"
+                        # Enhanced video prompt for better motion and product showcase
+                        video_scene = ad_text.get('video_scene', 'smooth camera zoom and rotation around the product, subtle lighting changes, gentle product movement, professional cinematic presentation')
+                        prompt_context = f"Professional product showcase video for {product_title}. {video_scene}. High quality motion with smooth camera movements, dynamic lighting effects, product rotation and subtle zoom transitions. Commercial advertisement style with cinematic depth and professional presentation."
                         logger.info("Using AI video generation with Amazon product image", extra={
-                            "product_image_url": selected_image
+                            "product_image_url": selected_image,
+                            "product_title": product_title
                         })
                     else:
                         # Use generated image for AI video generation (NOT traditional animation)
                         image_source = f"http://image-generator:5001/download/{filename}"
-                        prompt_context = f"Dramatic transformation and showcase for {ad_text.get('product', 'this product')}. {ad_text.get('video_scene', 'Cinematic camera movements with dynamic lighting, professional product presentation with smooth transitions and dramatic effects.')}"
+                        video_scene = ad_text.get('video_scene', 'smooth camera movements with dynamic transitions, rotating product display, professional lighting changes, cinematic effects')
+                        prompt_context = f"Professional commercial video for {product_title}. {video_scene}. Smooth camera movements with product rotation, dynamic lighting transitions, zoom effects, and cinematic presentation. High-quality motion with professional advertisement styling."
                         logger.info("Using AI video generation with generated image", extra={
-                            "generated_image_filename": filename
+                            "generated_image_filename": filename,
+                            "product_title": product_title
                         })
                     
                     # Use new simplified video generation API
@@ -357,8 +424,8 @@ async def run_ad_campaign(req: Request):
                         video_filename = video_data.get("video_filename", "")
                         if video_filename:
                             host = req.headers.get("host", "localhost:8000")
-                            # Use video-generator's direct URL for MP4 download
-                            video_url = f"http://video-generator:5003/videos/{video_filename}"
+                            # Use orchestrator's proxy endpoint for MP4 download
+                            video_url = f"http://{host}/download-video/{video_filename}"
                             logger.info("Video URL constructed", extra={
                                 "video_filename": video_filename,
                                 "video_url": video_url
@@ -636,8 +703,10 @@ async def generate_video_only(req: Request):
                 if not filename:
                     raise ValueError("Error generating video filename")
                 
-                # Use video-generator's direct URL for MP4 download
-                video_url = f"http://video-generator:5003/videos/{filename}"
+                # Get the host from the request to construct the proper external URL
+                host = req.headers.get("host", "localhost:8000")
+                # Use orchestrator's proxy endpoint for MP4 download
+                video_url = f"http://{host}/download-video/{filename}"
                 
                 logger.info("Video URL constructed", extra={
                     "video_filename": filename,

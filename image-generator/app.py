@@ -409,6 +409,77 @@ def generate_ad(data: ImagePrompt):
         logger.error(f"CRITICAL: Full error traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
+@app.post("/download-product-image")
+def download_product_image(data: dict):
+    """Download a product image from Amazon and save it locally"""
+    timer = None
+    try:
+        with TimingContext("product_image_download", logger) as timer:
+            image_url = data.get("image_url")
+            product_name = data.get("product_name", "product")
+            
+            if not image_url:
+                raise HTTPException(status_code=400, detail="image_url is required")
+            
+            logger.info("Downloading product image from Amazon", extra={
+                "image_url": image_url,
+                "product_name": product_name
+            })
+            
+            # Download image from Amazon
+            import requests
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(image_url, headers=headers, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            # Generate unique filename
+            image_id = str(uuid.uuid4()).replace('-', '')
+            filename = f"product_{image_id}.jpg"
+            file_path = os.path.join(IMAGES_DIR, filename)
+            
+            # Save the image
+            with open(file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            # Track image creation time for cleanup
+            image_timestamps[filename] = time.time()
+            
+            # Schedule cleanup after 10 minutes
+            schedule_cleanup(file_path, filename)
+            
+            logger.info("Product image downloaded successfully", extra={
+                "filename": filename,
+                "product_name": product_name,
+                "source": "amazon",
+                "duration_ms": round(timer.duration_ms, 2)
+            })
+            
+            return {
+                "status": "success",
+                "filename": filename,
+                "message": f"Product image downloaded successfully",
+                "generation_time_ms": round(timer.duration_ms, 2)
+            }
+            
+    except requests.RequestException as e:
+        logger.error("Failed to download product image", extra={
+            "error": str(e),
+            "image_url": data.get("image_url", ""),
+            "duration_ms": round(timer.duration_ms, 2) if timer else None
+        })
+        raise HTTPException(status_code=500, detail=f"Failed to download product image: {str(e)}")
+    except Exception as e:
+        logger.error("Unexpected error downloading product image", extra={
+            "error": str(e),
+            "image_url": data.get("image_url", ""),
+            "duration_ms": round(timer.duration_ms, 2) if timer else None
+        })
+        raise HTTPException(status_code=500, detail=f"Product image download failed: {str(e)}")
+
 @app.get("/download/{filename}")
 def download_image(filename: str, request: Request):
     """Download endpoint for generated images"""
