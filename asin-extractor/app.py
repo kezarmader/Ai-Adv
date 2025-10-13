@@ -62,14 +62,30 @@ class ASINExtractor:
     """Extract product information from Amazon ASIN"""
     
     def __init__(self):
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
+        # Multiple realistic User-Agents to rotate through
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        ]
+        
+        self.session = requests.Session()
+        self.session.headers.update({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-        }
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+        })
+        
+        self.request_count = 0
     
     def extract_asin_from_url(self, url: str) -> Optional[str]:
         """Extract ASIN from Amazon URL"""
@@ -101,12 +117,78 @@ class ASINExtractor:
         
         try:
             with TimingContext("amazon_scraping", logger, {"asin": asin}):
-                response = requests.get(url, headers=self.headers, timeout=10)
+                # Rotate User-Agent for each request
+                user_agent = self.user_agents[self.request_count % len(self.user_agents)]
+                self.session.headers.update({'User-Agent': user_agent})
+                self.request_count += 1
+                
+                # Add small delay to avoid rate limiting
+                import time
+                if self.request_count > 1:
+                    time.sleep(2)  # 2 second delay between requests
+                
+                logger.info("Making Amazon request", extra={
+                    "asin": asin,
+                    "url": url,
+                    "user_agent": user_agent[:50] + "...",
+                    "request_count": self.request_count
+                })
+                
+                response = self.session.get(url, timeout=15)
                 response.raise_for_status()
                 
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                # Extract product information
+                # Debug: Log what Amazon actually returned
+                page_title = soup.find('title')
+                page_title_text = page_title.get_text().strip() if page_title else "No title found"
+                
+                # Check for robot/captcha detection and other blocking indicators
+                blocking_indicators = [
+                    'robot', 'captcha', 'error', 'sorry', 'blocked', 'automation', 'bot',
+                    'validatecaptcha', 'opfcaptcha', 'csm-captcha'
+                ]
+                
+                is_blocked = (
+                    any(indicator in page_title_text.lower() for indicator in blocking_indicators) or
+                    any(indicator in response.text.lower() for indicator in ['validatecaptcha', 'opfcaptcha']) or
+                    page_title_text.strip() == "Amazon.com"  # Generic redirect page
+                )
+                
+                # Check if we got a product page or something else
+                has_product_title = bool(soup.find('span', {'id': 'productTitle'}))
+                has_price = bool(soup.find('span', class_='a-price-whole'))
+                
+                logger.info("Amazon page analysis", extra={
+                    "asin": asin,
+                    "response_status": response.status_code,
+                    "content_length": len(response.content),
+                    "page_title": page_title_text,
+                    "possibly_blocked": is_blocked,
+                    "has_product_title_element": has_product_title,
+                    "has_price_element": has_price,
+                    "url": url
+                })
+                
+                # If we're blocked, return an error instead of trying to scrape
+                if is_blocked:
+                    logger.error("Amazon is blocking our requests", extra={
+                        "asin": asin,
+                        "page_title": page_title_text,
+                        "user_agent": user_agent[:50] + "...",
+                        "url": url,
+                        "blocking_reason": "captcha_or_bot_detection"
+                    })
+                    
+                    # Return a clear error instead of fake data
+                    raise ValueError(f"Amazon blocked the request for ASIN {asin}. Page title: '{page_title_text}'. This may be due to rate limiting or bot detection.")
+                
+                # Log page structure for debugging
+                self._log_page_structure(soup, asin)
+                
+                # Extract product information with detailed logging
+                logger.debug("Starting product information extraction", extra={"asin": asin})
+                
                 product_info = {
                     "asin": asin,
                     "title": self._extract_title(soup),
@@ -145,17 +227,41 @@ class ASINExtractor:
     def _extract_title(self, soup: BeautifulSoup) -> str:
         """Extract product title"""
         selectors = [
-            '#productTitle',
-            '.product-title',
-            '[data-automation-id="product-title"]',
-            'h1.a-size-large'
+            'span#productTitle',           # Most common Amazon product title
+            'h1#productTitle',             # Alternative structure
+            '#productTitle',               # ID-based fallback
+            'span.product-title',          # Class-based
+            'h1.product-title',            # H1 variant
+            '[data-automation-id="product-title"]',  # Data attribute
+            'h1.a-size-large.a-spacing-none.a-color-base',  # Full Amazon classes
+            'h1.a-size-base-plus',         # Size variant
+            '.a-text-bold.a-text-normal',  # Bold text pattern
+            'span[id*="title"]',           # Any span with title in ID
+            'h1[id*="title"]'              # Any h1 with title in ID
         ]
         
-        for selector in selectors:
-            element = soup.select_one(selector)
-            if element:
-                return element.get_text().strip()
+        logger.debug("Attempting title extraction", extra={
+            "total_selectors": len(selectors)
+        })
         
+        for i, selector in enumerate(selectors):
+            element = soup.select_one(selector)
+            logger.debug(f"Title selector {i+1}", extra={
+                "selector": selector,
+                "found": bool(element),
+                "text_preview": element.get_text().strip()[:100] if element else None
+            })
+            
+            if element:
+                title = element.get_text().strip()
+                logger.info("Title extracted successfully", extra={
+                    "selector_used": selector,
+                    "title_length": len(title),
+                    "title_preview": title[:50] + "..." if len(title) > 50 else title
+                })
+                return title
+        
+        logger.warning("No title found with any selector")
         return "Unknown Product"
     
     def _extract_price(self, soup: BeautifulSoup) -> str:
@@ -325,6 +431,49 @@ class ASINExtractor:
                     return text
         
         return "Availability unknown"
+    
+    def _log_page_structure(self, soup: BeautifulSoup, asin: str) -> None:
+        """Log key page structure elements for debugging"""
+        # Check for common Amazon page elements
+        key_elements = {
+            'productTitle': soup.find('span', {'id': 'productTitle'}),
+            'productTitle_h1': soup.find('h1', {'id': 'productTitle'}),
+            'price_whole': soup.find('span', class_='a-price-whole'),
+            'price_element': soup.find('span', class_='a-price'),
+            'feature_bullets': soup.find('div', {'id': 'feature-bullets'}),
+            'product_image': soup.find('img', {'id': 'landingImage'}),
+            'breadcrumb': soup.find('div', {'id': 'wayfinding-breadcrumbs_container'}),
+            'availability': soup.find('div', {'id': 'availability'}),
+            'brand_element': soup.find('a', {'id': 'bylineInfo'})
+        }
+        
+        # Count total elements by type
+        all_spans = len(soup.find_all('span'))
+        all_divs = len(soup.find_all('div'))
+        all_h1s = len(soup.find_all('h1'))
+        all_images = len(soup.find_all('img'))
+        
+        found_elements = {k: bool(v) for k, v in key_elements.items()}
+        
+        logger.info("Amazon page structure analysis", extra={
+            "asin": asin,
+            "key_elements_found": found_elements,
+            "total_spans": all_spans,
+            "total_divs": all_divs,
+            "total_h1s": all_h1s,
+            "total_images": all_images
+        })
+        
+        # Log a sample of the page content (first few h1 and title elements)
+        sample_h1s = [h1.get_text().strip()[:100] for h1 in soup.find_all('h1')[:3]]
+        sample_titles = [elem.get('title', '')[:50] for elem in soup.find_all(attrs={'title': True})[:3] if elem.get('title')]
+        
+        if sample_h1s or sample_titles:
+            logger.debug("Page content samples", extra={
+                "asin": asin,
+                "sample_h1_texts": sample_h1s,
+                "sample_title_attributes": sample_titles
+            })
 
 # Initialize extractor
 extractor = ASINExtractor()

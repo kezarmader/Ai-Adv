@@ -88,7 +88,7 @@ services:
       - image-generator
       - poster-service
       - video-generator
-      - asin-extractor
+      # - asin-extractor  # Not needed for Option 2 (manual product input)
     networks: [app-net]
     ports:
       - "8000:8000"
