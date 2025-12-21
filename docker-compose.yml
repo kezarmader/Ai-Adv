@@ -3,7 +3,13 @@ version: "3.9"
 services:
   llm-service:
     image: ollama/ollama:latest          # always pin a tag you trust in prod
-    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     environment:
       NVIDIA_VISIBLE_DEVICES: "0"        # share the same GPU
       # NVIDIA_DRIVER_CAPABILITIES: compute,utility
@@ -19,7 +25,13 @@ services:
 
   image-generator:
     build: ./image-generator             # see Dockerfile tips below
-    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     environment:
       NVIDIA_VISIBLE_DEVICES: "0"
       # NVIDIA_DRIVER_CAPABILITIES: compute,utility
