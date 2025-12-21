@@ -15,11 +15,6 @@ services:
       - "11434"
     networks: [app-net]
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
     entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 3 && ollama pull llama3 && wait"]
 
   image-generator:
@@ -34,11 +29,6 @@ services:
       - "5001"
     networks: [app-net]
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
 
   poster-service:
     build: ./poster-service
